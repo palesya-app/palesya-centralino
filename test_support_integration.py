@@ -12,6 +12,8 @@ from support_integration.phone import normalize_phone, phones_match
 from support_integration.service import SupportService
 from support_integration.telnyx import extract_call_data, verify_signature
 from support_integration.voice_ai import map_final_event
+from support_integration import finance
+import datetime as _dt
 
 
 class FakeHubSpot:
@@ -467,6 +469,47 @@ def test_commercial_request_creates_deal_idempotent(service):
     second = system.create_commercial_request("comm-1", company_name="Nuova Palestra")
     assert second.get("duplicate") is True
     assert len(getattr(fake, "deals", [])) == 1
+
+
+def test_finance_active12_monthly_computes_next_payment():
+    props, summary = finance.compute_finance({
+        "tipo_contratto": "active_12", "cadenza_pagamento": "mensile", "stato_pagamento": "pagato",
+        "active_inizio": "2026-01-01", "ultimo_pagamento_data": "2026-08-01", "licenza_pagata": True,
+    }, current_used=1, today=_dt.date(2026, 8, 17))
+    assert props["fin_active_stato"] == "attivo"
+    assert props["fin_active_importo_annuo"] == 630.0
+    assert props["fin_prossimo_pagamento_data"] == "2026-09-01"
+    assert props["fin_prossimo_pagamento_importo"] == 70.0
+    assert props["fin_active_scadenza"] == "2026-12-31"
+    assert props["support_tickets_total"] == 5 and props["support_tickets_remaining"] == 4
+    assert summary["in_regola_pagamenti"] is True and summary["interventi_residui"] == 4
+
+
+def test_finance_insoluto_suspends_and_bills_now():
+    props, summary = finance.compute_finance({
+        "tipo_contratto": "active_24", "stato_pagamento": "insoluto", "active_inizio": "2026-01-01",
+    }, current_used=0, today=_dt.date(2026, 6, 10))
+    assert props["fin_active_stato"] == "in_attesa_pagamento"
+    assert props["support_plan_status"] == "suspended"
+    assert props["fin_prossimo_pagamento_data"] == "2026-06-10"
+    assert summary["in_regola_pagamenti"] is False
+
+
+def test_finance_expired_plan_marked_scaduto():
+    props, _ = finance.compute_finance({
+        "tipo_contratto": "active_12", "stato_pagamento": "pagato", "active_scadenza": "2025-12-31",
+    }, today=_dt.date(2026, 8, 17))
+    assert props["fin_active_stato"] == "scaduto"
+
+
+def test_finance_summary_from_props_reads_back():
+    s = finance.summary_from_props({
+        "fin_tipo_contratto": "active_12", "fin_active_stato": "attivo", "fin_stato_pagamento": "pagato",
+        "fin_licenza_pagata": "true", "support_tickets_remaining": "3",
+        "fin_prossimo_pagamento_data": "2026-09-01", "fin_prossimo_pagamento_importo": "70",
+    })
+    assert s["piano_attivo"] is True and s["in_regola_pagamenti"] is True
+    assert s["interventi_residui"] == 3 and s["prossimo_pagamento_importo"] == 70.0
 
 
 def test_telnyx_call_data_mapping():

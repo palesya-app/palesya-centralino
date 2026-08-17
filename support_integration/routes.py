@@ -252,6 +252,50 @@ def build_router():
         except Exception:
             return JSONResponse({"ok": False, "error": "hubspot_setup_failed"}, status_code=503)
 
+    @router.post("/api/finance/setup")
+    async def finance_setup(request: Request):
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            return {"ok": True, **service.hubspot.ensure_finance_model()}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "finance_setup_failed"}, status_code=503)
+
+    @router.post("/api/finance/sync")
+    async def finance_sync(request: Request):
+        # Import dal gestionale Palesya: aggiorna il quadro finanziario di un cliente.
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        try:
+            return service.sync_finance(
+                company_id=str(body.get("company_id") or ""), phone=str(body.get("phone") or ""),
+                company_name=str(body.get("company_name") or ""), payload=body,
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "finance_sync_failed"}, status_code=503)
+
+    @router.get("/api/finance/status")
+    async def finance_status(request: Request, phone: str = "", company_id: str = "", company_name: str = ""):
+        # Sola lettura: l'AI legge il quadro finanziario del cliente.
+        if _rate_limited(request, 60):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        if not verify_voice_signature(b"", request.headers, support_settings.voice_ai_webhook_secret) and not _unsigned_allowed():
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        if not (phone or company_id or company_name):
+            return JSONResponse({"ok": False, "error": "identifier_required"}, status_code=400)
+        try:
+            return {"ok": True, **service.financial_status(phone=phone, company_id=company_id, company_name=company_name)}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "crm_unavailable"}, status_code=503)
+
     @router.post("/api/support/admin/reverse-consumption")
     async def reverse_consumption(request: Request):
         if not _admin_allowed(request):

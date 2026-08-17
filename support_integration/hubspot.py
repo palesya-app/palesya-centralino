@@ -29,6 +29,12 @@ class HubSpotClient:
         "name", "phone", "support_tickets_total", "support_tickets_used",
         "support_tickets_remaining", "support_plan_status", "support_plan_start_date",
         "support_plan_expiration_date", "last_support_intervention",
+        # Finanza Palesya (gestione contratto/pagamenti lato cliente)
+        "fin_tipo_contratto", "fin_licenza_pagata", "fin_licenza_importo", "fin_licenza_data",
+        "fin_active_stato", "fin_active_inizio", "fin_active_scadenza", "fin_active_importo_annuo",
+        "fin_cadenza_pagamento", "fin_stato_pagamento", "fin_metodo_pagamento",
+        "fin_ultimo_pagamento_data", "fin_ultimo_pagamento_importo",
+        "fin_prossimo_pagamento_data", "fin_prossimo_pagamento_importo",
     )
     TICKET_PROPERTIES = (
         "subject", "content", "hs_pipeline", "hs_pipeline_stage", "hs_ticket_priority",
@@ -197,6 +203,41 @@ class HubSpotClient:
                 created["ticket"].append(name)
         created["pipeline"] = self.ensure_support_pipeline()
         return created
+
+    FINANCE_GROUP = "finanza_palesya"
+
+    def ensure_finance_model(self):
+        """Crea (idempotente) le proprietà finanziarie sul Company: contratto,
+        licenza, Active, pagamenti. Additivo: non tocca proprietà esistenti."""
+        created = []
+        self.ensure_property_group("companies", self.FINANCE_GROUP, "Finanza Palesya")
+        specs = {
+            "fin_tipo_contratto": ("Tipo contratto", "enumeration", "select",
+                                   ("licenza", "active_12", "active_24", "active_36", "licenza_active", "nessuno")),
+            "fin_licenza_pagata": ("Licenza pagata", "enumeration", "booleancheckbox", ("true", "false")),
+            "fin_licenza_importo": ("Importo licenza", "number", "number", ()),
+            "fin_licenza_data": ("Data acquisto licenza", "date", "date", ()),
+            "fin_active_stato": ("Stato Active", "enumeration", "select",
+                                 ("attivo", "sospeso", "scaduto", "in_attesa_pagamento", "nessuno")),
+            "fin_active_inizio": ("Inizio Active", "date", "date", ()),
+            "fin_active_scadenza": ("Scadenza/rinnovo Active", "date", "date", ()),
+            "fin_active_importo_annuo": ("Importo Active annuo", "number", "number", ()),
+            "fin_cadenza_pagamento": ("Cadenza pagamento", "enumeration", "select", ("mensile", "annuale")),
+            "fin_stato_pagamento": ("Stato pagamento", "enumeration", "select",
+                                    ("pagato", "parziale", "insoluto", "rimborsato")),
+            "fin_metodo_pagamento": ("Metodo pagamento", "enumeration", "select",
+                                     ("bonifico", "carta", "contanti", "paypal", "stripe", "sepa", "altro")),
+            "fin_ultimo_pagamento_data": ("Ultimo pagamento — data", "date", "date", ()),
+            "fin_ultimo_pagamento_importo": ("Ultimo pagamento — importo", "number", "number", ()),
+            "fin_prossimo_pagamento_data": ("Prossimo pagamento — data", "date", "date", ()),
+            "fin_prossimo_pagamento_importo": ("Prossimo pagamento — importo", "number", "number", ()),
+        }
+        for name, (label, kind, field, options) in specs.items():
+            _, was_created = self.ensure_property("companies", name, label, kind, field,
+                                                  "Campo finanziario Palesya", options, self.FINANCE_GROUP)
+            if was_created:
+                created.append(name)
+        return {"created": created, "group": self.FINANCE_GROUP}
 
     def ensure_support_pipeline(self):
         if self.settings.support_pipeline_id:

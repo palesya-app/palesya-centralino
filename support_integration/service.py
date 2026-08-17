@@ -9,6 +9,7 @@ import db_compat
 from config import settings as app_settings
 from schema import ensure_schema
 
+from . import finance
 from .config import settings as support_settings
 from .hubspot import HubSpotClient
 from .phone import normalize_phone
@@ -557,11 +558,72 @@ class SupportService:
                     })
             except Exception:
                 logger.warning("hubspot_error open_tickets_context_failed")
+        finance_summary = {}
+        if context.get("company_id"):
+            try:
+                company = self.hubspot.get_company(context["company_id"])
+                finance_summary = finance.summary_from_props(company.get("properties") or {})
+            except Exception:
+                logger.warning("hubspot_error finance_context_failed")
         return {"caller_phone": normalized, "open_tickets": open_tickets,
-                "open_tickets_count": len(open_tickets), **{key: context.get(key) for key in (
+                "open_tickets_count": len(open_tickets),
+                "finance": finance_summary,
+                **{key: context.get(key) for key in (
                     "customer_found", "customer_match_status", "company_id", "company_name", "contact_id", "contact_name",
                     "support_plan_status", "support_tickets_total", "support_tickets_used", "support_tickets_remaining",
                 )}}
+
+    def _resolve_company(self, company_id="", phone="", company_name=""):
+        """Trova il Company per id, poi per numero, poi per nome (univoco)."""
+        if company_id:
+            try:
+                return self.hubspot.get_company(company_id)
+            except Exception:
+                return None
+        if phone:
+            _, ctx = self._call_context(phone)
+            if ctx.get("company_id"):
+                try:
+                    return self.hubspot.get_company(ctx["company_id"])
+                except Exception:
+                    pass
+        if company_name:
+            try:
+                companies = self.hubspot.search_companies_by_name(company_name)
+                unique = {str(item.get("id")): item for item in companies if item.get("id")}
+                if len(unique) == 1:
+                    return next(iter(unique.values()))
+            except Exception:
+                pass
+        return None
+
+    def sync_finance(self, company_id="", phone="", company_name="", payload=None, actor="gestionale"):
+        """Import dal gestionale Palesya: aggiorna il quadro finanziario di un Company.
+
+        Calcola scadenze/prossimo pagamento/stato dal listino e mappa tutto sulle
+        proprietà HubSpot. Non tocca gli interventi USATI (li governa il consumo
+        deterministico), ma ricalcola i residui su total-used.
+        """
+        payload = payload or {}
+        company = self._resolve_company(company_id, phone, company_name)
+        if not company:
+            raise ValueError("azienda non trovata")
+        cid = str(company.get("id"))
+        props = company.get("properties") or {}
+        used = _int(props.get("support_tickets_used"))
+        fin_props, summary = finance.compute_finance(payload, current_used=used)
+        self.hubspot.update_company(cid, fin_props)
+        logger.info("finance_synced company=%s stato=%s", cid, summary.get("stato_pagamento"))
+        return {"ok": True, "company_id": cid, "company_name": props.get("name"), **summary}
+
+    def financial_status(self, phone="", company_id="", company_name=""):
+        """Quadro finanziario leggibile dall'AI (solo lettura)."""
+        company = self._resolve_company(company_id, phone, company_name)
+        if not company:
+            return {"found": False}
+        props = company.get("properties") or {}
+        return {"found": True, "company_id": str(company.get("id")),
+                "company_name": props.get("name"), **finance.summary_from_props(props)}
 
     def _context_from_company(self, company, status="found"):
         props = (company or {}).get("properties") or {}
