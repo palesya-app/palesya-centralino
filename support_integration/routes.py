@@ -235,7 +235,8 @@ def build_router():
         try:
             return service.create_callback(
                 call_id, phone=_field(body, request, "phone", "from_number"), reason=str(body.get("reason") or ""),
-                name=str(body.get("name") or ""),
+                name=_field(body, request, "name", "contact_name", "caller_name"),
+                company_name=_field(body, request, "company_name", "gym_name", "structure"),
             )
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)

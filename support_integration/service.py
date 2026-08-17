@@ -647,15 +647,32 @@ class SupportService:
             "company_id": None, "company_name": None,
         })
 
-    def create_callback(self, call_id, phone="", reason="", name="", actor="voice_ai"):
-        """Registra una richiesta di ricontatto (fallback escalation), idempotente per call_id."""
+    def create_callback(self, call_id, phone="", reason="", name="", actor="voice_ai", company_name=""):
+        """Registra una richiesta di ricontatto / lead (idempotente per call_id).
+
+        Come il ticket: usa la palestra riconosciuta dal CRM; se il numero non è
+        riconosciuto prova a risolverla dal nome detto a voce e comunque la registra
+        (i lead commerciali spesso NON sono ancora clienti).
+        """
         call_id = str(call_id or "").strip()
         if not call_id:
             raise ValueError("call_id obbligatorio")
         session = self._session(call_id) or {}
         company_id = session.get("COMPANY_ID")
         contact_id = session.get("CONTACT_ID")
-        company_name = session.get("COMPANY_NAME")
+        stated_company = str(company_name or "").strip()
+        if not company_id and stated_company:
+            try:
+                companies = self.hubspot.search_companies_by_name(stated_company)
+                unique = {str(item.get("id")): item for item in companies if item.get("id")}
+                if len(unique) == 1:
+                    company_id = next(iter(unique))
+            except Exception:
+                logger.warning("hubspot_error resolve_company_by_name_failed")
+        resolved_company = session.get("COMPANY_NAME")
+        if resolved_company in (None, "", "Unknown Caller", "Cliente sconosciuto"):
+            resolved_company = None
+        company_name = resolved_company or stated_company or None
         caller_phone = normalize_phone(phone, self.support_config.default_country_code) if phone else session.get("FROM_PHONE")
         con = self._conn()
         try:
