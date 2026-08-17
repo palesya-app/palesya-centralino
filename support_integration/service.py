@@ -851,8 +851,12 @@ class SupportService:
                     session = self._session(call_id) or session
             except Exception:
                 logger.warning("hubspot_error resolve_company_by_name_failed")
-        # Nome palestra da mostrare: quello riconosciuto dal CRM, altrimenti quello detto.
-        display_company = session.get("COMPANY_NAME") or company_name
+        # Nome palestra da mostrare: quello riconosciuto dal CRM, altrimenti quello
+        # detto a voce. I placeholder di "non riconosciuto" non devono vincere sul nome reale.
+        sess_company = session.get("COMPANY_NAME")
+        if sess_company in (None, "", "Unknown Caller", "Cliente sconosciuto"):
+            sess_company = None
+        display_company = sess_company or company_name
         open_tickets = []
         if session.get("COMPANY_ID"):
             open_tickets = self.hubspot.find_open_tickets_by_company(session["COMPANY_ID"], category)
