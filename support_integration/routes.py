@@ -158,6 +158,8 @@ def build_router():
         try:
             return service.upsert_ticket(
                 call_id, phone=_field(body, request, "phone", "from_number"), description=description,
+                contact_name=_field(body, request, "contact_name", "caller_name", "name"),
+                company_name=_field(body, request, "company_name", "gym_name", "structure"),
                 category=str(body.get("category") or ""),
                 summary=str(body.get("summary") or ""), severity=str(body.get("severity") or ""),
                 troubleshooting=str(body.get("troubleshooting") or ""), device=str(body.get("device") or ""),

@@ -198,10 +198,16 @@ class SupportService:
                            reason=None, summary="", resolution="", category="other",
                            status="new", source="ai_phone", match_status="unknown", duration=None,
                            voice_ai_call_id="", alert_level=None, severity="", troubleshooting="",
-                           device="", intent="", escalation_reason="", follow_up=None):
+                           device="", intent="", escalation_reason="", follow_up=None, contact_name=""):
+        company = call.get("company_name") or "Cliente sconosciuto"
+        contact_name = (contact_name or "").strip()
+        who = "{} · {}".format(company, contact_name) if contact_name else company
+        # Testata con le info del cliente sempre in evidenza sul ticket.
+        header = "Segnalato da: {}{}\nTelefono: {}\n\n".format(
+            contact_name or "—", " ({})".format(company) if company else "", call.get("caller_phone") or "—")
         props = {
-            "subject": "[AI Support] {} — {}".format(call.get("company_name") or "Unknown Caller", (summary or "richiesta assistenza")[:120]),
-            "content": summary or "Chiamata assistenza telefonica",
+            "subject": "[AI Support] {} — {}".format(who, (summary or "richiesta assistenza")[:120]),
+            "content": header + (summary or "Chiamata assistenza telefonica"),
             "ticket_source": source,
             "support_consumed": "true" if support_consumed else "false",
             "caller_phone": call.get("caller_phone") or "",
@@ -796,7 +802,7 @@ class SupportService:
 
     def upsert_ticket(self, call_id, phone="", category="other", summary="", severity="",
                       troubleshooting="", device="", intent="technical", escalation_reason="",
-                      description=""):
+                      description="", contact_name="", company_name=""):
         """Crea/aggiorna il ticket durante la chiamata SENZA scalare crediti.
 
         Contratto minimo per l'agente vocale: bastano ``call_id`` + ``phone`` +
@@ -831,6 +837,22 @@ class SupportService:
         if not session:
             raise ValueError("sessione non disponibile: fornire il numero chiamante")
         category = str(category or "other").strip().lower()
+        contact_name = str(contact_name or "").strip()
+        company_name = str(company_name or "").strip()
+        # "Controlla nel gestionale": se il numero non ha riconosciuto la palestra,
+        # prova a risolverla dal nome detto a voce e legala alla sessione/ticket.
+        if not session.get("COMPANY_ID") and company_name:
+            try:
+                companies = self.hubspot.search_companies_by_name(company_name)
+                unique = {str(item.get("id")): item for item in companies if item.get("id")}
+                if len(unique) == 1:
+                    context = self._context_from_company(next(iter(unique.values())), "found")
+                    self._bind_session_customer(call_id, session.get("FROM_PHONE"), context)
+                    session = self._session(call_id) or session
+            except Exception:
+                logger.warning("hubspot_error resolve_company_by_name_failed")
+        # Nome palestra da mostrare: quello riconosciuto dal CRM, altrimenti quello detto.
+        display_company = session.get("COMPANY_NAME") or company_name
         open_tickets = []
         if session.get("COMPANY_ID"):
             open_tickets = self.hubspot.find_open_tickets_by_company(session["COMPANY_ID"], category)
@@ -841,20 +863,24 @@ class SupportService:
             ticket_id = self._ensure_ticket({
                 "call_id": call_id, "telnyx_call_id": session.get("TELNYX_CALL_ID"),
                 "caller_phone": session.get("FROM_PHONE"), "company_id": session.get("COMPANY_ID"),
-                "contact_id": session.get("CONTACT_ID"), "company_name": session.get("COMPANY_NAME"),
+                "contact_id": session.get("CONTACT_ID"), "company_name": display_company,
                 "customer_match_status": session.get("CUSTOMER_MATCH_STATUS"),
             })
         follow_up = bool([item for item in open_tickets if str(item.get("id")) != str(ticket_id)])
         self.hubspot.update_ticket(ticket_id, self._ticket_properties(
             {"call_id": call_id, "telnyx_call_id": session.get("TELNYX_CALL_ID"),
-             "caller_phone": session.get("FROM_PHONE"), "company_name": session.get("COMPANY_NAME")},
+             "caller_phone": session.get("FROM_PHONE"), "company_name": display_company},
             support_consumed=False, summary=summary, category=category, status="investigating",
             match_status=session.get("CUSTOMER_MATCH_STATUS"), severity=str(severity or "").strip().lower(),
             troubleshooting=troubleshooting, device=device, intent=str(intent or "technical").strip().lower(),
-            escalation_reason=escalation_reason, follow_up=follow_up,
+            escalation_reason=escalation_reason, follow_up=follow_up, contact_name=contact_name,
         ))
         self._save_session(call_id, {"TICKET_ID": ticket_id})
         return {"ok": True, "ticket_id": ticket_id, "follow_up": follow_up,
+                "customer_found": bool(session.get("COMPANY_ID")),
+                "company_name": display_company or None,
+                "contact_name": contact_name or None,
+                "category": category, "severity": severity,
                 "existing_open_tickets": [str(item.get("id")) for item in open_tickets]}
 
     def reverse_consumption(self, call_id, actor="admin"):

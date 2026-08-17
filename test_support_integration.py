@@ -360,6 +360,19 @@ def test_upsert_ticket_infers_category_and_severity_from_description(service):
     assert ticket["support_consumed"] == "false"
 
 
+def test_upsert_ticket_includes_client_info(service):
+    system, fake = service
+    result = system.upsert_ticket(
+        "mid-info", phone="+393331234567",
+        description="Il tornello non apre", contact_name="Mario Rossi",
+    )
+    assert result["ok"] is True
+    assert result["contact_name"] == "Mario Rossi"
+    ticket = fake.tickets[result["ticket_id"]]["properties"]
+    assert "Mario Rossi" in ticket["subject"]
+    assert "Segnalato da: Mario Rossi" in ticket["content"]
+
+
 def test_upsert_ticket_explicit_fields_win_over_inference(service):
     system, fake = service
     result = system.upsert_ticket(
