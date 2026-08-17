@@ -51,6 +51,24 @@ def _unsigned_allowed():
     return support_settings.allow_unsigned_webhooks and str(__import__("os").environ.get("PALESYA_ENV", __import__("os").environ.get("GYMFLOW_ENV", "local"))).lower() != "production"
 
 
+def _field(body, request, *keys):
+    """Legge un campo dal body JSON, con fallback sulla querystring.
+
+    I tool Retell passano spesso call_id/phone come query (`{{call_id}}`,
+    `{{from_number}}`) mentre la descrizione libera resta nel body: così i
+    due canali funzionano entrambi senza obbligare un formato preciso.
+    """
+    for key in keys:
+        value = body.get(key)
+        if value not in (None, ""):
+            return str(value)
+    for key in keys:
+        value = request.query_params.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
 def build_router():
     router = APIRouter()
 
@@ -131,15 +149,15 @@ def build_router():
             body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
         except (ValueError, UnicodeDecodeError):
             return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
-        call_id = str(body.get("call_id") or "").strip()
+        call_id = _field(body, request, "call_id").strip()
         if not call_id or len(call_id) > 200:
             return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
         # Contratto minimo: l'agente può passare solo call_id + phone + description.
         # Alias accettati per la descrizione libera del problema.
-        description = str(body.get("description") or body.get("problem") or body.get("issue") or "")
+        description = _field(body, request, "description", "problem", "issue")
         try:
             return service.upsert_ticket(
-                call_id, phone=str(body.get("phone") or ""), description=description,
+                call_id, phone=_field(body, request, "phone", "from_number"), description=description,
                 category=str(body.get("category") or ""),
                 summary=str(body.get("summary") or ""), severity=str(body.get("severity") or ""),
                 troubleshooting=str(body.get("troubleshooting") or ""), device=str(body.get("device") or ""),
@@ -165,8 +183,8 @@ def build_router():
             return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
         try:
             return {"ok": True, **service.verify_customer(
-                phone=str(body.get("phone") or ""), company_name=str(body.get("company_name") or ""),
-                contact_name=str(body.get("contact_name") or ""), call_id=str(body.get("call_id") or ""),
+                phone=_field(body, request, "phone", "from_number"), company_name=str(body.get("company_name") or ""),
+                contact_name=str(body.get("contact_name") or ""), call_id=_field(body, request, "call_id"),
             )}
         except Exception:
             return JSONResponse({"ok": False, "error": "crm_unavailable"}, status_code=503)
@@ -183,12 +201,12 @@ def build_router():
             body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
         except (ValueError, UnicodeDecodeError):
             return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
-        call_id = str(body.get("call_id") or "").strip()
+        call_id = _field(body, request, "call_id").strip()
         if not call_id or len(call_id) > 200:
             return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
         try:
             return service.create_commercial_request(
-                call_id, phone=str(body.get("phone") or ""), company_name=str(body.get("company_name") or ""),
+                call_id, phone=_field(body, request, "phone", "from_number"), company_name=str(body.get("company_name") or ""),
                 contact_name=str(body.get("contact_name") or ""), structure=str(body.get("structure") or ""),
                 need=str(body.get("need") or ""), outcome=str(body.get("outcome") or "nuovo"),
             )
@@ -209,12 +227,12 @@ def build_router():
             body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
         except (ValueError, UnicodeDecodeError):
             return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
-        call_id = str(body.get("call_id") or "").strip()
+        call_id = _field(body, request, "call_id").strip()
         if not call_id or len(call_id) > 200:
             return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
         try:
             return service.create_callback(
-                call_id, phone=str(body.get("phone") or ""), reason=str(body.get("reason") or ""),
+                call_id, phone=_field(body, request, "phone", "from_number"), reason=str(body.get("reason") or ""),
                 name=str(body.get("name") or ""),
             )
         except ValueError as exc:
