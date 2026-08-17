@@ -1,0 +1,246 @@
+"""API routes per webhook Telnyx/Voice AI e amministrazione supporto."""
+import collections
+import threading
+import time
+
+from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi.responses import JSONResponse
+
+import security
+from lan_config import is_loopback
+
+from .config import settings as support_settings
+from .service import SupportService
+from .telnyx import parse_event, verify_signature
+from .voice_ai import (
+    parse_event as parse_voice_event,
+    verify_retell_signature,
+    verify_signature as verify_voice_signature,
+)
+
+
+service = SupportService()
+_rate_lock = threading.Lock()
+_rate_buckets = collections.defaultdict(collections.deque)
+
+
+def _rate_limited(request, limit=120):
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with _rate_lock:
+        bucket = _rate_buckets[ip]
+        while bucket and now - bucket[0] > 60:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            return True
+        bucket.append(now)
+        return False
+
+
+def _admin_allowed(request):
+    user = getattr(request.state, "user", None)
+    if security.allowed(user, "admin") and (not security.settings.auth_required or user):
+        return True
+    if is_loopback(request.client.host if request.client else "") and not security.settings.auth_required:
+        return True
+    provided = request.headers.get("x-support-admin-secret", "")
+    return bool(support_settings.support_admin_secret and provided and provided == support_settings.support_admin_secret)
+
+
+def _unsigned_allowed():
+    return support_settings.allow_unsigned_webhooks and str(__import__("os").environ.get("PALESYA_ENV", __import__("os").environ.get("GYMFLOW_ENV", "local"))).lower() != "production"
+
+
+def build_router():
+    router = APIRouter()
+
+    @router.post("/api/webhooks/telnyx")
+    async def telnyx_webhook(request: Request, background_tasks: BackgroundTasks):
+        if _rate_limited(request, 600):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        raw = await request.body()
+        verified = verify_signature(raw, request.headers, support_settings.telnyx_public_key, support_settings.telnyx_timestamp_tolerance)
+        if not verified and not _unsigned_allowed():
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        try:
+            event = parse_event(raw)
+        except (ValueError, TypeError):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        try:
+            if not service.register_event(event):
+                return {"ok": True, "duplicate": True}
+            background_tasks.add_task(service.process_telnyx_event, event)
+            return {"ok": True, "accepted": True}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "persistence_error"}, status_code=503)
+
+    @router.post("/api/webhooks/voice-ai")
+    async def voice_ai_webhook(request: Request, background_tasks: BackgroundTasks):
+        if _rate_limited(request, 600):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        raw = await request.body()
+        verified = (
+            verify_voice_signature(raw, request.headers, support_settings.voice_ai_webhook_secret)
+            or verify_retell_signature(raw, request.headers, support_settings.retell_api_key,
+                                       support_settings.telnyx_timestamp_tolerance)
+        )
+        if not verified and not _unsigned_allowed():
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        try:
+            event = parse_voice_event(raw)
+        except (ValueError, TypeError):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        try:
+            if not service.register_event(event):
+                return {"ok": True, "duplicate": True}
+            background_tasks.add_task(service.process_voice_event, event)
+            return {"ok": True, "accepted": True}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "persistence_error"}, status_code=503)
+
+    @router.get("/api/voice-ai/context")
+    async def voice_ai_context(request: Request, phone: str = ""):
+        if _rate_limited(request, 60):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        if not verify_voice_signature(b"", request.headers, support_settings.voice_ai_webhook_secret) and not _unsigned_allowed():
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        if not phone or len(phone) > 64:
+            return JSONResponse({"ok": False, "error": "phone_required"}, status_code=400)
+        try:
+            return {"ok": True, **service.context_for_phone(phone)}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "crm_unavailable"}, status_code=503)
+
+    def _voice_signed(raw, headers):
+        return (
+            verify_voice_signature(raw, headers, support_settings.voice_ai_webhook_secret)
+            or verify_retell_signature(raw, headers, support_settings.retell_api_key,
+                                       support_settings.telnyx_timestamp_tolerance)
+            or _unsigned_allowed()
+        )
+
+    @router.post("/api/voice-ai/ticket")
+    async def voice_ai_ticket(request: Request):
+        if _rate_limited(request, 120):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        raw = await request.body()
+        if not _voice_signed(raw, request.headers):
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        try:
+            import json as _json
+            body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        call_id = str(body.get("call_id") or "").strip()
+        if not call_id or len(call_id) > 200:
+            return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
+        try:
+            return service.upsert_ticket(
+                call_id, phone=str(body.get("phone") or ""), category=str(body.get("category") or "other"),
+                summary=str(body.get("summary") or ""), severity=str(body.get("severity") or ""),
+                troubleshooting=str(body.get("troubleshooting") or ""), device=str(body.get("device") or ""),
+                intent=str(body.get("intent") or "technical"),
+                escalation_reason=str(body.get("human_escalation_reason") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "crm_unavailable"}, status_code=503)
+
+    @router.post("/api/voice-ai/verify")
+    async def voice_ai_verify(request: Request):
+        if _rate_limited(request, 120):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        raw = await request.body()
+        if not _voice_signed(raw, request.headers):
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        try:
+            import json as _json
+            body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        try:
+            return {"ok": True, **service.verify_customer(
+                phone=str(body.get("phone") or ""), company_name=str(body.get("company_name") or ""),
+                contact_name=str(body.get("contact_name") or ""), call_id=str(body.get("call_id") or ""),
+            )}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "crm_unavailable"}, status_code=503)
+
+    @router.post("/api/voice-ai/commercial")
+    async def voice_ai_commercial(request: Request):
+        if _rate_limited(request, 120):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        raw = await request.body()
+        if not _voice_signed(raw, request.headers):
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        try:
+            import json as _json
+            body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        call_id = str(body.get("call_id") or "").strip()
+        if not call_id or len(call_id) > 200:
+            return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
+        try:
+            return service.create_commercial_request(
+                call_id, phone=str(body.get("phone") or ""), company_name=str(body.get("company_name") or ""),
+                contact_name=str(body.get("contact_name") or ""), structure=str(body.get("structure") or ""),
+                need=str(body.get("need") or ""), outcome=str(body.get("outcome") or "nuovo"),
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "crm_unavailable"}, status_code=503)
+
+    @router.post("/api/voice-ai/callback")
+    async def voice_ai_callback(request: Request):
+        if _rate_limited(request, 120):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        raw = await request.body()
+        if not _voice_signed(raw, request.headers):
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        try:
+            import json as _json
+            body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        call_id = str(body.get("call_id") or "").strip()
+        if not call_id or len(call_id) > 200:
+            return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
+        try:
+            return service.create_callback(
+                call_id, phone=str(body.get("phone") or ""), reason=str(body.get("reason") or ""),
+                name=str(body.get("name") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "callback_failed"}, status_code=503)
+
+    @router.post("/api/support/setup")
+    async def support_setup(request: Request):
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            return {"ok": True, **service.hubspot.ensure_support_model()}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "hubspot_setup_failed"}, status_code=503)
+
+    @router.post("/api/support/admin/reverse-consumption")
+    async def reverse_consumption(request: Request):
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            body = await request.json()
+            call_id = str(body.get("call_id") or "").strip()
+            if not call_id or len(call_id) > 200:
+                return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
+            user = getattr(request.state, "user", None) or {}
+            return service.reverse_consumption(call_id, actor=str(user.get("USERNAME") or "admin"))
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "reverse_failed"}, status_code=503)
+
+    return router

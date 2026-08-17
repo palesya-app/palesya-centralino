@@ -1,0 +1,37 @@
+# Blueprint Render per il solo centralino AI (support_app), separato dal sito.
+# In Render: New → Blueprint → seleziona il repo → imposta i secret (sync:false).
+services:
+  - type: web
+    name: palesya-centralino
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn support_app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: PALESYA_ENV
+        value: production
+      # Generati automaticamente da Render (nessun valore da incollare):
+      - key: PALESYA_SECRET_KEY
+        generateValue: true
+      - key: SUPPORT_ADMIN_SECRET
+        generateValue: true
+      # Non segreti:
+      - key: HUBSPOT_SUPPORT_PIPELINE_ID
+        value: "0"
+      - key: SUPPORT_ALLOW_UNSIGNED_WEBHOOKS
+        value: "0"
+      - key: SUPPORT_DEFAULT_COUNTRY_CODE
+        value: "39"
+      # Segreti da incollare a mano nella dashboard (restano nascosti):
+      - key: HUBSPOT_ACCESS_TOKEN
+        sync: false
+      - key: RETELL_API_KEY
+        sync: false
+      - key: TELNYX_PUBLIC_KEY
+        sync: false
+      - key: VOICE_AI_WEBHOOK_SECRET
+        sync: false
