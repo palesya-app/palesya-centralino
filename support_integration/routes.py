@@ -134,9 +134,13 @@ def build_router():
         call_id = str(body.get("call_id") or "").strip()
         if not call_id or len(call_id) > 200:
             return JSONResponse({"ok": False, "error": "call_id_required"}, status_code=400)
+        # Contratto minimo: l'agente può passare solo call_id + phone + description.
+        # Alias accettati per la descrizione libera del problema.
+        description = str(body.get("description") or body.get("problem") or body.get("issue") or "")
         try:
             return service.upsert_ticket(
-                call_id, phone=str(body.get("phone") or ""), category=str(body.get("category") or "other"),
+                call_id, phone=str(body.get("phone") or ""), description=description,
+                category=str(body.get("category") or ""),
                 summary=str(body.get("summary") or ""), severity=str(body.get("severity") or ""),
                 troubleshooting=str(body.get("troubleshooting") or ""), device=str(body.get("device") or ""),
                 intent=str(body.get("intent") or "technical"),

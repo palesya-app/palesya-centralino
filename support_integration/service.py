@@ -159,6 +159,41 @@ class SupportService:
 
     SEVERITY_TO_PRIORITY = {"low": "LOW", "medium": "MEDIUM", "high": "HIGH", "critical": "URGENT"}
 
+    # Inferenza categoria da descrizione libera: l'agente vocale non deve più
+    # classificare a mano. Ordine = priorità (la prima categoria che matcha vince).
+    CATEGORY_KEYWORDS = (
+        ("turnstile", ("tornell", "varco", "cancellett", "girevol")),
+        ("access_control", ("badge", "tessera", "tessere", "rfid", "controllo access", "apertura port", "impronta", "qr", "chip")),
+        ("hardware", ("stampant", "scanner", "cassett", " pos", "tablet", "monitor", "computer", " pc", "wifi", "rete", "cavo", "non si accende", "guast", "rotto", "lettore")),
+        ("billing", ("fattur", "pagament", "addebit", "ricevut", "rata", "incass", "sdd", "rid ", "iva", "contabil", "scontrin")),
+        ("migration", ("migrazion", "importazion", "import ", "trasferiment", "esportazion", "vecchio gestional", "spostare i dati", "recupero dati")),
+        ("configuration", ("configuraz", "impostazion", "impostare", "settare", "listino", "orari", "calendar", "corso", "corsi", "sala", "abbonament")),
+        ("software", ("gestional", "software", "applicazion", " app", "programma", "schermat", "login", "accedere", "password", "si blocca", "crash", "errore", "bug", "pagina", "non si apre", "aggiornament")),
+    )
+
+    # Segnali forti per stimare la severity dal racconto del chiamante.
+    SEVERITY_KEYWORDS = (
+        ("critical", ("emergenz", "urgentissim", "bloccato tutto", "fermo tutto", "non funziona niente", "palestra ferma", "non entra nessuno", "non incass", "tutto fermo", "tutto bloccato", "down", " giù")),
+        ("high", ("urgent", "non riesc", "non funzion", "bloccat", "impossibile", "da stamattina", "da ieri", "fermo", "molti client", "non apr")),
+        ("low", ("informazion", "vorrei saper", "come si fa", "come faccio", "domanda", "curiosit", "piccol")),
+    )
+
+    @classmethod
+    def _infer_category(cls, text):
+        low = " " + (text or "").lower() + " "
+        for category, needles in cls.CATEGORY_KEYWORDS:
+            if any(needle in low for needle in needles):
+                return category
+        return "other"
+
+    @classmethod
+    def _infer_severity(cls, text):
+        low = " " + (text or "").lower() + " "
+        for severity, needles in cls.SEVERITY_KEYWORDS:
+            if any(needle in low for needle in needles):
+                return severity
+        return "medium"
+
     def _ticket_properties(self, call, *, support_consumed=False, before=None, after=None,
                            reason=None, summary="", resolution="", category="other",
                            status="new", source="ai_phone", match_status="unknown", duration=None,
@@ -760,8 +795,15 @@ class SupportService:
         return {"ok": True, "call_id": call_id, "deal_id": deal_id}
 
     def upsert_ticket(self, call_id, phone="", category="other", summary="", severity="",
-                      troubleshooting="", device="", intent="technical", escalation_reason=""):
+                      troubleshooting="", device="", intent="technical", escalation_reason="",
+                      description=""):
         """Crea/aggiorna il ticket durante la chiamata SENZA scalare crediti.
+
+        Contratto minimo per l'agente vocale: bastano ``call_id`` + ``phone`` +
+        ``description`` (il problema raccontato a voce). Categoria e severity, se
+        non passate esplicitamente, vengono dedotte dal testo. I campi granulari
+        (category/severity/troubleshooting/device) restano accettati per retro-
+        compatibilità e, se presenti, hanno la precedenza sull'inferenza.
 
         Serve a Silvia per lasciare al tecnico umano un ticket già compilato prima
         di un eventuale transfer. Il consumo resta deterministico su call_analyzed.
@@ -769,6 +811,17 @@ class SupportService:
         call_id = str(call_id or "").strip()
         if not call_id:
             raise ValueError("call_id obbligatorio")
+        # Descrizione libera come fonte primaria: alimenta summary e inferenze.
+        description = str(description or "").strip()
+        summary = str(summary or "").strip() or description
+        troubleshooting = str(troubleshooting or "").strip()
+        classify_text = " ".join(filter(None, (description, summary, troubleshooting)))
+        category = str(category or "").strip().lower()
+        if category in ("", "other"):
+            category = self._infer_category(classify_text)
+        severity = str(severity or "").strip().lower()
+        if not severity:
+            severity = self._infer_severity(classify_text)
         session = self._session(call_id)
         if not session and phone:
             session = self._ensure_voice_session(call_id, {

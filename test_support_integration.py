@@ -346,6 +346,31 @@ def test_upsert_ticket_creates_without_consuming(service):
     assert fake.company["properties"]["support_tickets_remaining"] == "10"
 
 
+def test_upsert_ticket_infers_category_and_severity_from_description(service):
+    system, fake = service
+    result = system.upsert_ticket(
+        "mid-min", phone="+393331234567",
+        description="Il tornello all'ingresso non legge più i badge da stamattina",
+    )
+    assert result["ok"] is True
+    ticket = fake.tickets[result["ticket_id"]]["properties"]
+    assert ticket["support_issue_category"] == "turnstile"
+    assert ticket["support_severity"] == "high"
+    assert ticket["support_issue_summary"].startswith("Il tornello")
+    assert ticket["support_consumed"] == "false"
+
+
+def test_upsert_ticket_explicit_fields_win_over_inference(service):
+    system, fake = service
+    result = system.upsert_ticket(
+        "mid-expl", phone="+393331234567",
+        description="Il tornello non legge i badge", category="hardware", severity="low",
+    )
+    ticket = fake.tickets[result["ticket_id"]]["properties"]
+    assert ticket["support_issue_category"] == "hardware"
+    assert ticket["support_severity"] == "low"
+
+
 def test_call_is_logged_to_hubspot_with_metrics(service):
     system, fake = service
     _session(system, "log-1")
