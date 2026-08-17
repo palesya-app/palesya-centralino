@@ -7,6 +7,8 @@ restano invariati.
 
 Avvio:  uvicorn support_app:app --host 0.0.0.0 --port ${PORT:-8080}
 """
+import os
+
 from fastapi import FastAPI
 
 from config import settings
@@ -14,8 +16,10 @@ from schema import ensure_schema
 from support_integration.routes import build_router
 
 
-# Crea le tabelle SUPPORT_* se non esistono (idempotente).
-ensure_schema(settings.database_path)
+# In produzione (Render) DATABASE_URL punta a Postgres → memoria persistente.
+# In locale, senza DATABASE_URL, resta SQLite. Crea le tabelle SUPPORT_*.
+DB_TARGET = os.getenv("DATABASE_URL", "").strip() or str(settings.database_path)
+ensure_schema(DB_TARGET)
 
 app = FastAPI(
     title="Palesya AI Support",

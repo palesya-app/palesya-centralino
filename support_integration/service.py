@@ -3,8 +3,9 @@ import datetime as dt
 import hashlib
 import json
 import logging
-import sqlite3
+import os
 
+import db_compat
 from config import settings as app_settings
 from schema import ensure_schema
 
@@ -33,20 +34,27 @@ def _int(value, default=0):
 
 
 class SupportService:
-    def __init__(self, db_path=None, hubspot=None, support_config=None):
+    def __init__(self, db_path=None, hubspot=None, support_config=None, database_url=None):
+        # DATABASE_URL (Postgres) vince sul percorso SQLite: in produzione la
+        # memoria è persistente, in locale/test resta SQLite senza cambiare codice.
+        self.database_url = str(database_url if database_url is not None else os.getenv("DATABASE_URL", "")).strip()
         self.db_path = str(db_path or app_settings.database_path)
+        self._target = self.database_url or self.db_path
+        self._is_pg = db_compat.is_postgres(self._target)
         self.support_config = support_config or support_settings
         self.hubspot = hubspot or HubSpotClient(self.support_config)
 
     def _conn(self):
-        con = sqlite3.connect(self.db_path, timeout=30)
-        con.row_factory = sqlite3.Row
-        con.execute("PRAGMA foreign_keys=ON")
-        con.execute("PRAGMA busy_timeout=10000")
-        return con
+        return db_compat.connect(self._target)
+
+    def _serialize_company(self, con, company_id):
+        """Serializza il consumo per azienda: su Postgres un advisory lock
+        replica ciò che BEGIN IMMEDIATE fa su SQLite (write lock esclusivo)."""
+        if self._is_pg and company_id:
+            con.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (str(company_id),))
 
     def ensure_local_schema(self):
-        ensure_schema(self.db_path)
+        ensure_schema(self._target)
 
     def register_event(self, event):
         """Registra l'evento prima dell'ack; gli errori sono ritentabili."""
@@ -81,7 +89,7 @@ class SupportService:
         con = self._conn()
         try:
             con.execute(
-                """UPDATE SUPPORT_WEBHOOK_EVENTS SET STATUS=?, ERROR=?, PROCESSED_AT=CASE WHEN ?='PROCESSED' THEN CURRENT_TIMESTAMP ELSE PROCESSED_AT END
+                """UPDATE SUPPORT_WEBHOOK_EVENTS SET STATUS=?, ERROR=?, PROCESSED_AT=CASE WHEN ?='PROCESSED' THEN CAST(CURRENT_TIMESTAMP AS TEXT) ELSE PROCESSED_AT END
                    WHERE SOURCE=? AND EVENT_ID=?""",
                 (status, (str(error)[:500] if error else None), status, event["source"], event["event_id"]),
             )
@@ -283,6 +291,7 @@ class SupportService:
         con = self._conn()
         try:
             con.execute("BEGIN IMMEDIATE")
+            self._serialize_company(con, session["COMPANY_ID"])
             existing = con.execute("SELECT * FROM SUPPORT_CONSUMPTION_LEDGER WHERE CALL_ID=?", (call_id,)).fetchone()
             if existing:
                 return {
@@ -628,8 +637,8 @@ class SupportService:
                  (reason or None), (session.get("SUMMARY_JSON") and None), task_id),
             )
             con.execute(
-                """INSERT OR IGNORE INTO SUPPORT_AUDIT_LOG(EVENT_KEY,CALL_ID,COMPANY_ID,REASON,SOURCE,ACTOR)
-                   VALUES(?,?,?,?,?,?)""",
+                """INSERT INTO SUPPORT_AUDIT_LOG(EVENT_KEY,CALL_ID,COMPANY_ID,REASON,SOURCE,ACTOR)
+                   VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING""",
                 ("callback:" + call_id, call_id, company_id, (reason or "richiamo assistenza"), "Callback", actor),
             )
             con.commit()
@@ -685,7 +694,7 @@ class SupportService:
         hubspot_call_id = str(call.get("id")) if call else None
         con = self._conn()
         try:
-            con.execute("INSERT OR IGNORE INTO SUPPORT_CALL_LOG(CALL_ID,HUBSPOT_CALL_ID) VALUES(?,?)",
+            con.execute("INSERT INTO SUPPORT_CALL_LOG(CALL_ID,HUBSPOT_CALL_ID) VALUES(?,?) ON CONFLICT DO NOTHING",
                         (call_id, hubspot_call_id))
             con.commit()
         finally:
@@ -742,7 +751,7 @@ class SupportService:
         deal_id = str(deal.get("id")) if deal else None
         con = self._conn()
         try:
-            con.execute("INSERT OR IGNORE INTO SUPPORT_COMMERCIAL_LINKS(CALL_ID,HUBSPOT_DEAL_ID) VALUES(?,?)",
+            con.execute("INSERT INTO SUPPORT_COMMERCIAL_LINKS(CALL_ID,HUBSPOT_DEAL_ID) VALUES(?,?) ON CONFLICT DO NOTHING",
                         (call_id, deal_id))
             con.commit()
         finally:

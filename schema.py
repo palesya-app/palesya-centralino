@@ -4,8 +4,9 @@ Contiene SOLO le tabelle tecniche dell'assistenza telefonica (idempotenza,
 sessioni, ledger, audit, callback, log chiamata, richieste commerciali). Non
 include la struttura del gestionale Palesya: questo servizio è isolato.
 """
-import sqlite3
 from pathlib import Path
+
+import db_compat
 
 
 SUPPORT_SCHEMA = """
@@ -116,11 +117,22 @@ CREATE TABLE IF NOT EXISTS SUPPORT_COMMERCIAL_LINKS(
 """
 
 
-def ensure_schema(database_path):
-    """Crea (idempotente) le sole tabelle tecniche del centralino."""
-    path = Path(database_path)
+def ensure_schema(target):
+    """Crea (idempotente) le sole tabelle tecniche del centralino.
+
+    Funziona sia su SQLite (percorso file) sia su Postgres (DATABASE_URL).
+    """
+    if db_compat.is_postgres(target):
+        ddl = SUPPORT_SCHEMA.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        con = db_compat.connect(target)
+        try:
+            con.executescript(ddl)
+        finally:
+            con.close()
+        return str(target)
+    path = Path(target)
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path), timeout=30)
+    con = db_compat.connect(str(path))
     try:
         con.executescript(SUPPORT_SCHEMA)
         con.commit()
