@@ -514,6 +514,26 @@ def test_finance_expired_plan_marked_scaduto():
     assert props["fin_active_stato"] == "scaduto"
 
 
+def test_finance_aggregate_report():
+    companies = [
+        {"id": "1", "properties": {"name": "A", "fin_tipo_contratto": "active_12",
+         "fin_stato_pagamento": "pagato", "fin_active_stato": "attivo",
+         "fin_incassato_totale": "630", "fin_prossimo_pagamento_data": "2026-09-01",
+         "fin_prossimo_pagamento_importo": "70"}},
+        {"id": "2", "properties": {"name": "B", "fin_tipo_contratto": "active_24",
+         "fin_stato_pagamento": "insoluto", "fin_active_stato": "in_attesa_pagamento",
+         "fin_incassato_totale": "600", "fin_prossimo_pagamento_data": "2026-08-20",
+         "fin_prossimo_pagamento_importo": "600"}},
+        {"id": "3", "properties": {"name": "NoContract"}},  # ignorata
+    ]
+    rep = finance.aggregate_report(companies, today=_dt.date(2026, 8, 18), scadenze_giorni=30)
+    assert rep["clienti_con_contratto"] == 2
+    assert rep["incassato_totale"] == 1230.0
+    assert rep["pagamenti_per_stato"]["pagato"] == 1 and rep["pagamenti_per_stato"]["insoluto"] == 1
+    assert rep["insoluti_count"] == 1 and rep["insoluti"][0]["azienda"] == "B"
+    assert rep["prossime_scadenze_count"] == 2
+
+
 def test_finance_summary_from_props_reads_back():
     s = finance.summary_from_props({
         "fin_tipo_contratto": "active_12", "fin_active_stato": "attivo", "fin_stato_pagamento": "pagato",

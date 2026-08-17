@@ -282,6 +282,20 @@ def build_router():
         except Exception:
             return JSONResponse({"ok": False, "error": "finance_sync_failed"}, status_code=503)
 
+    @router.get("/api/finance/report")
+    async def finance_report(request: Request, giorni: int = 30):
+        # Riepilogo finanziario aggregato (totale incassato, insoluti, prossime scadenze).
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            giorni = max(1, min(365, int(giorni)))
+        except (TypeError, ValueError):
+            giorni = 30
+        try:
+            return {"ok": True, **service.finance_report(scadenze_giorni=giorni)}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "finance_report_failed"}, status_code=503)
+
     @router.get("/api/finance/status")
     async def finance_status(request: Request, phone: str = "", company_id: str = "", company_name: str = ""):
         # Sola lettura: l'AI legge il quadro finanziario del cliente.

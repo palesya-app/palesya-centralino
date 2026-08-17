@@ -616,6 +616,11 @@ class SupportService:
         logger.info("finance_synced company=%s stato=%s", cid, summary.get("stato_pagamento"))
         return {"ok": True, "company_id": cid, "company_name": props.get("name"), **summary}
 
+    def finance_report(self, scadenze_giorni=30):
+        """Riepilogo finanziario aggregato: totale incassato, insoluti, scadenze."""
+        companies = self.hubspot.list_finance_companies()
+        return finance.aggregate_report(companies, scadenze_giorni=scadenze_giorni)
+
     def financial_status(self, phone="", company_id="", company_name=""):
         """Quadro finanziario leggibile dall'AI (solo lettura)."""
         company = self._resolve_company(company_id, phone, company_name)

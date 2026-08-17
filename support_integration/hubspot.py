@@ -34,7 +34,7 @@ class HubSpotClient:
         "fin_active_stato", "fin_active_inizio", "fin_active_scadenza", "fin_active_importo_annuo",
         "fin_cadenza_pagamento", "fin_stato_pagamento", "fin_metodo_pagamento",
         "fin_ultimo_pagamento_data", "fin_ultimo_pagamento_importo",
-        "fin_prossimo_pagamento_data", "fin_prossimo_pagamento_importo",
+        "fin_prossimo_pagamento_data", "fin_prossimo_pagamento_importo", "fin_incassato_totale",
     )
     TICKET_PROPERTIES = (
         "subject", "content", "hs_pipeline", "hs_pipeline_stage", "hs_ticket_priority",
@@ -233,6 +233,7 @@ class HubSpotClient:
             "fin_ultimo_pagamento_importo": ("Ultimo pagamento — importo", "number", "number", ()),
             "fin_prossimo_pagamento_data": ("Prossimo pagamento — data", "date", "date", ()),
             "fin_prossimo_pagamento_importo": ("Prossimo pagamento — importo", "number", "number", ()),
+            "fin_incassato_totale": ("Totale incassato dal cliente", "number", "number", ()),
         }
         for name, (label, kind, field, options) in specs.items():
             _, was_created = self.ensure_property("companies", name, label, kind, field,
@@ -435,6 +436,30 @@ class HubSpotClient:
             return []
         unique = {str(item.get("id")): item for item in response.get("results", []) if item.get("id")}
         return list(unique.values())
+
+    def list_finance_companies(self, max_pages=20):
+        """Tutte le aziende con un contratto finanziario impostato (paginato)."""
+        out = []
+        after = None
+        for _ in range(max_pages):
+            body = {
+                "filterGroups": [{"filters": [
+                    {"propertyName": "fin_tipo_contratto", "operator": "HAS_PROPERTY"},
+                ]}],
+                "properties": list(self.COMPANY_PROPERTIES), "limit": 100,
+            }
+            if after:
+                body["after"] = after
+            try:
+                response = self._post("/crm/v3/objects/companies/search", body)
+            except HubSpotError:
+                logger.warning("hubspot_error finance_companies_search_failed")
+                break
+            out.extend(response.get("results", []))
+            after = ((response.get("paging") or {}).get("next") or {}).get("after")
+            if not after:
+                break
+        return out
 
     def lookup_customer(self, phone, default_country_code="39"):
         contacts = self.search_contacts_by_phone(phone, default_country_code)

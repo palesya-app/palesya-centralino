@@ -65,6 +65,56 @@ def _add_month(d):
     return dt.date(year, month, day)
 
 
+def aggregate_report(companies, today=None, scadenze_giorni=30):
+    """Riepilogo finanziario aggregato su tutte le aziende con contratto.
+
+    Ritorna: totale incassato, ultimo incasso registrato, conteggi per stato,
+    elenco insoluti e prossime scadenze entro `scadenze_giorni`.
+    """
+    today = today or dt.date.today()
+    tot_incassato = 0.0
+    ultimo_incasso = 0.0
+    per_stato = {"pagato": 0, "parziale": 0, "insoluto": 0, "rimborsato": 0}
+    per_active = {"attivo": 0, "sospeso": 0, "scaduto": 0, "in_attesa_pagamento": 0, "nessuno": 0}
+    insoluti = []
+    prossime_scadenze = []
+    clienti = 0
+    for c in companies or []:
+        props = c.get("properties") or {}
+        if not props.get("fin_tipo_contratto"):
+            continue
+        clienti += 1
+        nome = props.get("name") or "-"
+        inc = _num(props.get("fin_incassato_totale"), 0.0) or 0.0
+        tot_incassato += inc
+        ultimo_incasso += (_num(props.get("fin_ultimo_pagamento_importo"), 0.0) or 0.0)
+        stato = props.get("fin_stato_pagamento")
+        if stato in per_stato:
+            per_stato[stato] += 1
+        active = props.get("fin_active_stato")
+        if active in per_active:
+            per_active[active] += 1
+        if stato in ("insoluto", "parziale"):
+            insoluti.append({"azienda": nome, "company_id": str(c.get("id")),
+                             "stato": stato, "importo": _num(props.get("fin_prossimo_pagamento_importo"))})
+        scad = _date(props.get("fin_prossimo_pagamento_data"))
+        if scad and 0 <= (scad - today).days <= scadenze_giorni:
+            prossime_scadenze.append({"azienda": nome, "company_id": str(c.get("id")),
+                                      "data": _iso(scad), "importo": _num(props.get("fin_prossimo_pagamento_importo"))})
+    prossime_scadenze.sort(key=lambda x: x["data"])
+    return {
+        "clienti_con_contratto": clienti,
+        "incassato_totale": round(tot_incassato, 2),
+        "somma_ultimi_pagamenti": round(ultimo_incasso, 2),
+        "pagamenti_per_stato": per_stato,
+        "active_per_stato": per_active,
+        "insoluti": insoluti,
+        "insoluti_count": len(insoluti),
+        "prossime_scadenze": prossime_scadenze,
+        "prossime_scadenze_count": len(prossime_scadenze),
+    }
+
+
 def summary_from_props(props):
     """Riepilogo finanziario leggibile dall'AI a partire dalle proprietà Company."""
     props = props or {}
@@ -91,6 +141,7 @@ def summary_from_props(props):
         "prossimo_pagamento_data": props.get("fin_prossimo_pagamento_data") or None,
         "prossimo_pagamento_importo": prossimo_importo,
         "metodo_pagamento": props.get("fin_metodo_pagamento") or None,
+        "incassato_totale": _num(props.get("fin_incassato_totale")),
     }
 
 
@@ -175,7 +226,10 @@ def compute_finance(payload, current_used=0, today=None):
     else:
         plan_status = "active"
 
+    incassato_totale = _num(payload.get("incassato_totale"))
+
     props = {
+        "fin_incassato_totale": incassato_totale,
         "fin_tipo_contratto": tipo,
         "fin_licenza_pagata": "true" if licenza_pagata else "false",
         "fin_licenza_importo": licenza_importo,
