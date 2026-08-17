@@ -17,6 +17,10 @@ LICENZA_IMPORTO = 1800.0
 INTERVENTI_INCLUSI_ACTIVE = 5
 ORA_EXTRA = 46.0
 
+# Metodi di incasso correnti: solo fattura + bonifico.
+METODI_CORRENTI = ("bonifico", "fattura")
+METODO_DEFAULT = "bonifico"
+
 LISTINO_ACTIVE = {
     "active_12": {"mensile": 70.0, "annuo": 630.0, "anni": 1},
     "active_24": {"mensile": 60.0, "annuo": 600.0, "anni": 2},
@@ -110,6 +114,11 @@ def compute_finance(payload, current_used=0, today=None):
     if stato_pagamento not in ("pagato", "parziale", "insoluto", "rimborsato", ""):
         stato_pagamento = ""
 
+    # Metodo di incasso: oggi solo fattura/bonifico. Se pagato senza metodo, default bonifico.
+    metodo = str(payload.get("metodo_pagamento") or "").strip().lower()
+    if not metodo and stato_pagamento in ("pagato", "parziale"):
+        metodo = METODO_DEFAULT
+
     # Licenza
     licenza_in_contratto = tipo in ("licenza", "licenza_active") or bool(payload.get("licenza_pagata"))
     licenza_pagata = bool(payload.get("licenza_pagata"))
@@ -177,7 +186,7 @@ def compute_finance(payload, current_used=0, today=None):
         "fin_active_importo_annuo": active_importo_annuo,
         "fin_cadenza_pagamento": cadenza,
         "fin_stato_pagamento": stato_pagamento,
-        "fin_metodo_pagamento": str(payload.get("metodo_pagamento") or "").strip().lower(),
+        "fin_metodo_pagamento": metodo,
         "fin_ultimo_pagamento_data": _iso(ultimo_data),
         "fin_ultimo_pagamento_importo": ultimo_importo,
         "fin_prossimo_pagamento_data": _iso(prossimo_data),

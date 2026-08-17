@@ -225,8 +225,10 @@ class HubSpotClient:
             "fin_cadenza_pagamento": ("Cadenza pagamento", "enumeration", "select", ("mensile", "annuale")),
             "fin_stato_pagamento": ("Stato pagamento", "enumeration", "select",
                                     ("pagato", "parziale", "insoluto", "rimborsato")),
+            # Al momento si incassa solo tramite fattura + bonifico; gli altri restano
+            # disponibili per il futuro ma non sono i metodi correnti.
             "fin_metodo_pagamento": ("Metodo pagamento", "enumeration", "select",
-                                     ("bonifico", "carta", "contanti", "paypal", "stripe", "sepa", "altro")),
+                                     ("bonifico", "fattura", "carta", "contanti", "sepa", "altro")),
             "fin_ultimo_pagamento_data": ("Ultimo pagamento — data", "date", "date", ()),
             "fin_ultimo_pagamento_importo": ("Ultimo pagamento — importo", "number", "number", ()),
             "fin_prossimo_pagamento_data": ("Prossimo pagamento — data", "date", "date", ()),

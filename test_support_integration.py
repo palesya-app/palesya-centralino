@@ -485,6 +485,18 @@ def test_finance_active12_monthly_computes_next_payment():
     assert summary["in_regola_pagamenti"] is True and summary["interventi_residui"] == 4
 
 
+def test_finance_default_method_is_bonifico_when_paid():
+    props, summary = finance.compute_finance({
+        "tipo_contratto": "active_12", "stato_pagamento": "pagato", "active_inizio": "2026-01-01",
+    }, today=_dt.date(2026, 3, 1))
+    assert props["fin_metodo_pagamento"] == "bonifico"
+    # metodo esplicito rispettato
+    props2, _ = finance.compute_finance({
+        "tipo_contratto": "active_12", "stato_pagamento": "pagato", "metodo_pagamento": "fattura",
+    }, today=_dt.date(2026, 3, 1))
+    assert props2["fin_metodo_pagamento"] == "fattura"
+
+
 def test_finance_insoluto_suspends_and_bills_now():
     props, summary = finance.compute_finance({
         "tipo_contratto": "active_24", "stato_pagamento": "insoluto", "active_inizio": "2026-01-01",
