@@ -242,6 +242,102 @@ class HubSpotClient:
                 created.append(name)
         return {"created": created, "group": self.FINANCE_GROUP}
 
+    EXPENSE_GROUP = "uscite_palesya"
+    EXPENSE_PIPELINE_LABEL = "Uscite aziendali"
+
+    def ensure_expenses_model(self):
+        """Modello Uscite (costi) sull'oggetto Ticket: gruppo + proprietà, e
+        (se il piano lo consente) una pipeline dedicata; altrimenti si usa quella
+        esistente distinguendo le uscite dalla proprietà `uscita_categoria`."""
+        created = []
+        self.ensure_property_group("tickets", self.EXPENSE_GROUP, "Uscite Palesya")
+        from .expenses import CATEGORIE, METODI, STATI
+        specs = {
+            "uscita_importo": ("Uscita — importo", "number", "number", ()),
+            "uscita_categoria": ("Uscita — categoria", "enumeration", "select", tuple(CATEGORIE)),
+            "uscita_metodo": ("Uscita — metodo", "enumeration", "select", tuple(METODI)),
+            "uscita_stato": ("Uscita — stato", "enumeration", "select", tuple(STATI)),
+            "uscita_data": ("Uscita — data", "date", "date", ()),
+            "uscita_fornitore": ("Uscita — fornitore", "string", "text", ()),
+        }
+        for name, (label, kind, field, options) in specs.items():
+            _, was_created = self.ensure_property("tickets", name, label, kind, field,
+                                                  "Campo uscite Palesya", options, self.EXPENSE_GROUP)
+            if was_created:
+                created.append(name)
+        pipeline = self._resolve_expenses_pipeline()
+        return {"created": created, "group": self.EXPENSE_GROUP, "pipeline": pipeline}
+
+    def _resolve_expenses_pipeline(self):
+        """Ritorna {id, stages:{da_pagare, pagata}, dedicated}. Prova a creare la
+        pipeline 'Uscite aziendali'; se il piano non lo consente usa l'esistente."""
+        if getattr(self, "_expenses_pipeline_cache", None):
+            return self._expenses_pipeline_cache
+        try:
+            pipelines = self._get("/crm/v3/pipelines/tickets").get("results", [])
+        except HubSpotError:
+            pipelines = []
+        for p in pipelines:
+            if str(p.get("label", "")).casefold() == self.EXPENSE_PIPELINE_LABEL.casefold():
+                stages = p.get("stages") or []
+                by_label = {str(s.get("label", "")).casefold(): str(s.get("id")) for s in stages}
+                result = {"id": str(p.get("id")), "dedicated": True,
+                          "stages": {"da_pagare": by_label.get("da pagare") or (str(stages[0]["id"]) if stages else "1"),
+                                     "pagata": by_label.get("pagata") or (str(stages[-1]["id"]) if stages else "1")},
+                          "default_stage": str(stages[0]["id"]) if stages else "1"}
+                self._expenses_pipeline_cache = result
+                return result
+        # Prova a creare la pipeline dedicata
+        body = {"label": self.EXPENSE_PIPELINE_LABEL, "displayOrder": 2, "stages": [
+            {"label": "Da pagare", "displayOrder": 0, "metadata": {"ticketState": "OPEN"}},
+            {"label": "Pagata", "displayOrder": 1, "metadata": {"ticketState": "CLOSED"}},
+        ]}
+        try:
+            p = self._post("/crm/pipelines/2026-03/tickets", body)
+            stages = p.get("stages") or []
+            by_label = {str(s.get("label", "")).casefold(): str(s.get("id")) for s in stages}
+            result = {"id": str(p.get("id")), "dedicated": True,
+                      "stages": {"da_pagare": by_label.get("da pagare"), "pagata": by_label.get("pagata")},
+                      "default_stage": str(stages[0]["id"]) if stages else "1"}
+        except HubSpotError:
+            # Fallback: pipeline esistente, le uscite si distinguono dalla proprietà.
+            pid = str(pipelines[0]["id"]) if pipelines else "0"
+            stages = (pipelines[0].get("stages") if pipelines else []) or []
+            sid = str(stages[0]["id"]) if stages else "1"
+            result = {"id": pid, "dedicated": False, "stages": {"da_pagare": sid, "pagata": sid}, "default_stage": sid}
+        self._expenses_pipeline_cache = result
+        return result
+
+    def create_expense(self, props, stato="pagata"):
+        pipeline = self._resolve_expenses_pipeline()
+        body = dict(props)
+        body["hs_pipeline"] = pipeline["id"]
+        body["hs_pipeline_stage"] = pipeline["stages"].get(stato) or pipeline["default_stage"]
+        return self._post("/crm/v3/objects/tickets", {"properties": body})
+
+    def list_expenses(self, max_pages=20):
+        """Tutte le uscite (ticket con `uscita_categoria` impostata), paginato."""
+        out = []
+        after = None
+        props = ["uscita_importo", "uscita_categoria", "uscita_metodo", "uscita_stato",
+                 "uscita_data", "uscita_fornitore", "subject"]
+        for _ in range(max_pages):
+            body = {"filterGroups": [{"filters": [
+                {"propertyName": "uscita_categoria", "operator": "HAS_PROPERTY"}]}],
+                "properties": props, "limit": 100}
+            if after:
+                body["after"] = after
+            try:
+                response = self._post("/crm/v3/objects/tickets/search", body)
+            except HubSpotError:
+                logger.warning("hubspot_error expenses_search_failed")
+                break
+            out.extend(response.get("results", []))
+            after = ((response.get("paging") or {}).get("next") or {}).get("after")
+            if not after:
+                break
+        return out
+
     def ensure_support_pipeline(self):
         if self.settings.support_pipeline_id:
             return {"id": self.settings.support_pipeline_id, "label": self.settings.support_pipeline_label, "created": False}

@@ -296,6 +296,47 @@ def build_router():
         except Exception:
             return JSONResponse({"ok": False, "error": "finance_report_failed"}, status_code=503)
 
+    @router.post("/api/finance/expenses/setup")
+    async def expenses_setup(request: Request):
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            return {"ok": True, **service.hubspot.ensure_expenses_model()}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "expenses_setup_failed"}, status_code=503)
+
+    @router.post("/api/finance/expense")
+    async def finance_expense(request: Request):
+        # Registra una uscita (costo aziendale).
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        try:
+            return service.record_expense(body)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "expense_failed"}, status_code=503)
+
+    @router.get("/api/finance/overview")
+    async def finance_overview(request: Request, giorni: int = 30):
+        # Quadro unico entrate - uscite = utile.
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            giorni = max(1, min(365, int(giorni)))
+        except (TypeError, ValueError):
+            giorni = 30
+        try:
+            return {"ok": True, **service.finance_overview(scadenze_giorni=giorni)}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "overview_failed"}, status_code=503)
+
     @router.get("/api/finance/status")
     async def finance_status(request: Request, phone: str = "", company_id: str = "", company_name: str = ""):
         # Sola lettura: l'AI legge il quadro finanziario del cliente.

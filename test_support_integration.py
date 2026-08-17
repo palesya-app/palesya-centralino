@@ -13,6 +13,7 @@ from support_integration.service import SupportService
 from support_integration.telnyx import extract_call_data, verify_signature
 from support_integration.voice_ai import map_final_event
 from support_integration import finance
+from support_integration import expenses as _expenses
 import datetime as _dt
 
 
@@ -542,6 +543,32 @@ def test_finance_summary_from_props_reads_back():
     })
     assert s["piano_attivo"] is True and s["in_regola_pagamenti"] is True
     assert s["interventi_residui"] == 3 and s["prossimo_pagamento_importo"] == 70.0
+
+
+def test_expense_normalize_and_validation():
+    props, summary = _expenses.normalize_expense({
+        "importo": "1200", "categoria": "affitto", "metodo": "bonifico", "stato": "pagata",
+        "data": "2026-08-01", "fornitore": "Immobiliare X"})
+    assert props["uscita_importo"] == 1200.0 and props["uscita_categoria"] == "affitto"
+    assert "1200" in props["subject"] and summary["stato"] == "pagata"
+    # categoria fuori lista -> altro
+    p2, _ = _expenses.normalize_expense({"importo": 50, "categoria": "boh"})
+    assert p2["uscita_categoria"] == "altro"
+    # importo mancante -> errore
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        _expenses.normalize_expense({"categoria": "software"})
+
+
+def test_expenses_aggregate():
+    tickets = [
+        {"id": "1", "properties": {"uscita_importo": "1000", "uscita_categoria": "affitto", "uscita_stato": "pagata", "uscita_data": "2026-08-01"}},
+        {"id": "2", "properties": {"uscita_importo": "300", "uscita_categoria": "software", "uscita_stato": "da_pagare", "uscita_data": "2026-08-10", "uscita_fornitore": "SaaS"}},
+    ]
+    rep = _expenses.aggregate_expenses(tickets, today=_dt.date(2026, 8, 18))
+    assert rep["uscite_totali"] == 1300.0 and rep["uscite_pagate"] == 1000.0
+    assert rep["uscite_da_pagare"] == 300.0 and rep["da_pagare_count"] == 1
+    assert rep["per_categoria"]["affitto"] == 1000.0
 
 
 def test_telnyx_call_data_mapping():

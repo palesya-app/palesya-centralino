@@ -10,6 +10,7 @@ from config import settings as app_settings
 from schema import ensure_schema
 
 from . import finance
+from . import expenses as expenses_mod
 from .config import settings as support_settings
 from .hubspot import HubSpotClient
 from .phone import normalize_phone
@@ -620,6 +621,36 @@ class SupportService:
         """Riepilogo finanziario aggregato: totale incassato, insoluti, scadenze."""
         companies = self.hubspot.list_finance_companies()
         return finance.aggregate_report(companies, scadenze_giorni=scadenze_giorni)
+
+    def record_expense(self, payload):
+        """Registra una uscita (costo) come record Ticket nella sezione Uscite."""
+        props, summary = expenses_mod.normalize_expense(payload or {})
+        ticket = self.hubspot.create_expense(props, stato=summary["stato"])
+        logger.info("expense_recorded categoria=%s importo=%s", summary["categoria"], summary["importo"])
+        return {"ok": True, "ticket_id": str(ticket.get("id")), **summary}
+
+    def expenses_report(self, from_date=None, to_date=None):
+        """Riepilogo uscite: totale, pagate/da pagare, per categoria."""
+        tickets = self.hubspot.list_expenses()
+        return expenses_mod.aggregate_expenses(tickets, from_date=from_date, to_date=to_date)
+
+    def finance_overview(self, scadenze_giorni=30):
+        """Quadro unico: ENTRATE (incassato) − USCITE (costi) = UTILE."""
+        entrate = self.finance_report(scadenze_giorni=scadenze_giorni)
+        uscite = self.expenses_report()
+        incassato = entrate.get("incassato_totale") or 0.0
+        costi = uscite.get("uscite_totali") or 0.0
+        return {
+            "entrate": entrate,
+            "uscite": uscite,
+            "riepilogo": {
+                "incassato_totale": round(incassato, 2),
+                "uscite_totali": round(costi, 2),
+                "saldo": round(incassato - costi, 2),
+                "uscite_da_pagare": uscite.get("uscite_da_pagare") or 0.0,
+                "insoluti_clienti": entrate.get("insoluti_count") or 0,
+            },
+        }
 
     def financial_status(self, phone="", company_id="", company_name=""):
         """Quadro finanziario leggibile dall'AI (solo lettura)."""
