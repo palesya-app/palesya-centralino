@@ -573,20 +573,32 @@ class HubSpotClient:
             self._association_cache[key] = response.get("results", [])
         return self._association_cache[key]
 
+    # typeId HUBSPOT_DEFINED per oggetto sorgente → target (unlabeled/primary).
+    _ASSOCIATION_FALLBACK = {
+        "tickets": {"companies": "26", "contacts": "16"},
+        "tasks": {"companies": "192", "contacts": "204"},
+        "calls": {"companies": "182", "contacts": "194"},
+        "deals": {"companies": "341", "contacts": "3"},
+    }
+
     def _associations(self, from_type, targets):
         output = []
-        fallback = {"companies": "26", "contacts": "16"}
+        fallback = self._ASSOCIATION_FALLBACK.get(from_type, {})
         for to_type, record_id in targets.items():
             if not record_id:
                 continue
             association_type_id = fallback.get(to_type)
             try:
                 labels = self._association_labels(from_type, to_type)
-                preferred = next((item for item in labels if str(item.get("label", "")).lower() in {"ticket_to_company", "ticket_to_contact", "primary"}), None)
+                # Preferisci l'associazione primaria/unlabeled corretta per questa coppia.
+                wanted = {"{}_to_{}".format(from_type[:-1], to_type[:-1]), "primary"}
+                preferred = next((item for item in labels if str(item.get("label", "")).lower() in wanted), None)
                 if preferred:
                     association_type_id = preferred.get("typeId") or association_type_id
             except HubSpotError:
                 pass
+            if not association_type_id:
+                continue
             output.append({"to": {"id": str(record_id)}, "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": int(association_type_id)}]})
         return output
 
