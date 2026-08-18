@@ -580,6 +580,7 @@ class HubSpotClient:
 
     def lookup_customer(self, phone, default_country_code="39"):
         contacts = self.search_contacts_by_phone(phone, default_country_code)
+        companies_by_phone = self.search_companies_by_phone(phone, default_country_code)
         candidates = []
         for contact in contacts:
             companies = self.get_company_for_contact(contact.get("id"))
@@ -587,18 +588,24 @@ class HubSpotClient:
                 candidates.append((contact, companies[0]))
             elif len(companies) > 1:
                 candidates.extend((contact, company) for company in companies)
-        if not candidates:
-            companies = self.search_companies_by_phone(phone, default_country_code)
-            if len(companies) == 1:
-                return self._context("found", None, companies[0])
-            if len(companies) > 1:
-                return self._context("ambiguous", None, None, candidates=companies)
-            return self._context("not_found", None, None)
-        unique = {(str(company.get("id")), str(contact.get("id"))): (contact, company) for contact, company in candidates}
-        if len(unique) != 1:
-            return self._context("ambiguous", None, None, candidates=[company for _, company in unique.values()])
-        contact, company = next(iter(unique.values()))
-        return self._context("found", contact, company)
+        unique = {(str(company.get("id")), str(contact.get("id"))): (contact, company)
+                  for contact, company in candidates}
+        # 1) Match pulito contatto+azienda (un solo abbinamento).
+        if len(unique) == 1:
+            contact, company = next(iter(unique.values()))
+            return self._context("found", contact, company)
+        # 2) Una sola AZIENDA riconosciuta dal numero: vince anche se i contatti sono
+        #    ambigui o assenti (il numero chiama la struttura). Allego il contatto se combacia.
+        if len(companies_by_phone) == 1:
+            company = companies_by_phone[0]
+            cid = str(company.get("id"))
+            contact = next((ct for ct, c in candidates if str(c.get("id")) == cid), None)
+            return self._context("found", contact, company)
+        # 3) Ambiguità reale: piu' aziende con quel numero, o piu' abbinamenti.
+        if len(companies_by_phone) > 1 or len(unique) > 1:
+            cands = companies_by_phone or [company for _, company in unique.values()]
+            return self._context("ambiguous", None, None, candidates=cands)
+        return self._context("not_found", None, None)
 
     def _context(self, status, contact, company, candidates=()):
         props = (company or {}).get("properties") or {}
