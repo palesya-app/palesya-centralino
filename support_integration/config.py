@@ -45,6 +45,10 @@ class SupportSettings:
     support_consumption_statuses: tuple
     allow_unsigned_webhooks: bool
     retell_api_key: str = ""
+    # Servizio AI a pagamento: enforcement (off finché non popolata la pipeline abbonati)
+    # e minuti/mese inclusi per utente (reset a inizio mese).
+    ai_eligibility_enforced: bool = False
+    ai_monthly_minutes: int = 20
 
 
 def load_support_settings():
@@ -67,6 +71,8 @@ def load_support_settings():
         support_pipeline_stage_id=str(_value("HUBSPOT_SUPPORT_PIPELINE_STAGE_ID", "") or "").strip(),
         support_consumption_statuses=_csv("SUPPORT_CONSUMPTION_STATUSES", "resolved,escalated"),
         allow_unsigned_webhooks=_bool("SUPPORT_ALLOW_UNSIGNED_WEBHOOKS", False),
+        ai_eligibility_enforced=_bool("AI_ELIGIBILITY_ENFORCED", False),
+        ai_monthly_minutes=max(1, int(_value("AI_MONTHLY_MINUTES", "20") or "20")),
     )
 
 

@@ -14,6 +14,7 @@ from support_integration.telnyx import extract_call_data, verify_signature
 from support_integration.voice_ai import map_final_event
 from support_integration import finance
 from support_integration import expenses as _expenses
+from support_integration import usage as _usage
 import datetime as _dt
 
 
@@ -543,6 +544,38 @@ def test_finance_summary_from_props_reads_back():
     })
     assert s["piano_attivo"] is True and s["in_regola_pagamenti"] is True
     assert s["interventi_residui"] == 3 and s["prossimo_pagamento_importo"] == 70.0
+
+
+def test_ai_usage_enforcement_off_serves_everyone():
+    s = _usage.usage_status({}, monthly_minutes_default=20, enforced=False)
+    assert s["ai_eligibile"] is True and s["ai_motivo"] == "enforcement_off"
+    assert s["ai_minuti_limite"] == 20 and s["ai_minuti_residui"] == 20
+
+
+def test_ai_usage_enforced_gating():
+    now = _dt.date(2026, 8, 18)
+    # non abbonato -> non idoneo
+    s = _usage.usage_status({"ai_service_active": "false"}, enforced=True, now=now)
+    assert s["ai_eligibile"] is False and s["ai_motivo"] == "non_abbonato"
+    # abbonato con minuti -> idoneo
+    s = _usage.usage_status({"ai_service_active": "true", "ai_minutes_used": "5", "ai_minutes_period": "2026-08"}, enforced=True, now=now)
+    assert s["ai_eligibile"] is True and s["ai_minuti_residui"] == 15
+    # abbonato ma minuti esauriti -> non idoneo
+    s = _usage.usage_status({"ai_service_active": "true", "ai_minutes_used": "20", "ai_minutes_period": "2026-08"}, enforced=True, now=now)
+    assert s["ai_eligibile"] is False and s["ai_motivo"] == "minuti_esauriti"
+
+
+def test_ai_usage_month_reset_and_accumulate():
+    now = _dt.date(2026, 8, 18)
+    # periodo vecchio => usati azzerati nel calcolo
+    s = _usage.usage_status({"ai_minutes_used": "18", "ai_minutes_period": "2026-07"}, enforced=True, now=now)
+    assert s["ai_minuti_usati"] == 0 and s["ai_minuti_residui"] == 20
+    # accumulo: 90s = 1.5 min, su mese nuovo riparte da 0
+    up = _usage.apply_call_minutes({"ai_minutes_used": "18", "ai_minutes_period": "2026-07"}, 90, now=now)
+    assert up["ai_minutes_period"] == "2026-08" and float(up["ai_minutes_used"]) == 1.5
+    # accumulo nello stesso mese: somma
+    up2 = _usage.apply_call_minutes({"ai_minutes_used": "1.5", "ai_minutes_period": "2026-08"}, 120, now=now)
+    assert float(up2["ai_minutes_used"]) == 3.5
 
 
 def test_expense_normalize_and_validation():

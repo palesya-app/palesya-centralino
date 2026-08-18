@@ -11,6 +11,7 @@ from schema import ensure_schema
 
 from . import finance
 from . import expenses as expenses_mod
+from . import usage as usage_mod
 from .config import settings as support_settings
 from .hubspot import HubSpotClient
 from .phone import normalize_phone
@@ -536,6 +537,9 @@ class SupportService:
                 self._log_call_to_hubspot(session, final, ticket_id, result, follow_up=follow_up)
             except Exception:
                 logger.warning("hubspot_error call_log_failed")
+            # Monte minuti AI/mese: somma la durata della chiamata al cliente riconosciuto.
+            if session.get("COMPANY_ID") and final.get("duration_seconds"):
+                self.record_call_minutes(session["COMPANY_ID"], final["duration_seconds"])
             self._event_status(event, "PROCESSED")
             return {"ok": True, "ticket_id": ticket_id,
                     "eligible": bool(session.get("COMPANY_ID")), **result}
@@ -560,19 +564,46 @@ class SupportService:
             except Exception:
                 logger.warning("hubspot_error open_tickets_context_failed")
         finance_summary = {}
+        ai_usage = self._ai_usage_from_props({})  # default (enforcement off => eligibile)
         if context.get("company_id"):
             try:
                 company = self.hubspot.get_company(context["company_id"])
-                finance_summary = finance.summary_from_props(company.get("properties") or {})
+                props = company.get("properties") or {}
+                finance_summary = finance.summary_from_props(props)
+                ai_usage = self._ai_usage_from_props(props)
             except Exception:
                 logger.warning("hubspot_error finance_context_failed")
         return {"caller_phone": normalized, "open_tickets": open_tickets,
                 "open_tickets_count": len(open_tickets),
                 "finance": finance_summary,
+                **ai_usage,
                 **{key: context.get(key) for key in (
                     "customer_found", "customer_match_status", "company_id", "company_name", "contact_id", "contact_name",
                     "support_plan_status", "support_tickets_total", "support_tickets_used", "support_tickets_remaining",
                 )}}
+
+    def _ai_usage_from_props(self, props):
+        return usage_mod.usage_status(
+            props or {},
+            monthly_minutes_default=self.support_config.ai_monthly_minutes,
+            enforced=self.support_config.ai_eligibility_enforced,
+        )
+
+    def record_call_minutes(self, company_id, seconds):
+        """Accumula i minuti di una chiamata sul monte mensile del cliente (reset a inizio mese)."""
+        if not company_id or not seconds:
+            return None
+        try:
+            company = self.hubspot.get_company(company_id)
+            props = company.get("properties") or {}
+            updates = usage_mod.apply_call_minutes(
+                props, seconds, monthly_minutes_default=self.support_config.ai_monthly_minutes)
+            self.hubspot.update_company(company_id, updates)
+            logger.info("ai_minutes_updated company_present=True used=%s", updates.get("ai_minutes_used"))
+            return updates
+        except Exception:
+            logger.warning("hubspot_error ai_minutes_update_failed")
+            return None
 
     def _resolve_company(self, company_id="", phone="", company_name=""):
         """Trova il Company per id, poi per numero, poi per nome (univoco)."""
@@ -690,15 +721,22 @@ class SupportService:
         status = context.get("customer_match_status")
         eligible = bool(status == "found" and context.get("company_id"))
         open_tickets = []
+        ai_usage = self._ai_usage_from_props({})
         if context.get("company_id"):
             try:
                 open_tickets = self.hubspot.find_open_tickets_by_company(context["company_id"])
             except Exception:
                 open_tickets = []
+            try:
+                company = self.hubspot.get_company(context["company_id"])
+                ai_usage = self._ai_usage_from_props(company.get("properties") or {})
+            except Exception:
+                logger.warning("hubspot_error ai_usage_eligibility_failed")
         return {
             "caller_phone": phone,
             "eligible_for_support": eligible,
             "open_tickets_count": len(open_tickets),
+            **ai_usage,
             **{key: context.get(key) for key in (
                 "customer_found", "customer_match_status", "company_id", "company_name", "contact_id",
                 "support_plan_status", "support_tickets_total", "support_tickets_used", "support_tickets_remaining",

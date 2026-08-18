@@ -35,6 +35,7 @@ class HubSpotClient:
         "fin_cadenza_pagamento", "fin_stato_pagamento", "fin_metodo_pagamento",
         "fin_ultimo_pagamento_data", "fin_ultimo_pagamento_importo",
         "fin_prossimo_pagamento_data", "fin_prossimo_pagamento_importo", "fin_incassato_totale",
+        "ai_service_active", "ai_minutes_limit", "ai_minutes_used", "ai_minutes_period",
     )
     TICKET_PROPERTIES = (
         "subject", "content", "hs_pipeline", "hs_pipeline_stage", "hs_ticket_priority",
@@ -234,6 +235,11 @@ class HubSpotClient:
             "fin_prossimo_pagamento_data": ("Prossimo pagamento — data", "date", "date", ()),
             "fin_prossimo_pagamento_importo": ("Prossimo pagamento — importo", "number", "number", ()),
             "fin_incassato_totale": ("Totale incassato dal cliente", "number", "number", ()),
+            # Servizio AI a pagamento: abbonamento attivo + monte minuti/mese.
+            "ai_service_active": ("Servizio AI attivo (abbonamento)", "enumeration", "booleancheckbox", ("true", "false")),
+            "ai_minutes_limit": ("Minuti AI/mese inclusi", "number", "number", ()),
+            "ai_minutes_used": ("Minuti AI usati (mese corrente)", "number", "number", ()),
+            "ai_minutes_period": ("Periodo minuti AI (YYYY-MM)", "string", "text", ()),
         }
         for name, (label, kind, field, options) in specs.items():
             _, was_created = self.ensure_property("companies", name, label, kind, field,
