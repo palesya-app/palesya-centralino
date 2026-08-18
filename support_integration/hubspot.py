@@ -432,14 +432,35 @@ class HubSpotClient:
 
     def search_companies_by_phone(self, phone, default_country_code="39"):
         results = {}
-        for candidate in self._query_variants(phone, default_country_code):
-            response = self._post("/crm/v3/objects/companies/search", {
-                "query": candidate, "limit": 100, "properties": list(self.COMPANY_PROPERTIES),
-            })
+        variants = list(self._query_variants(phone, default_country_code))
+
+        def _absorb(response):
             for item in response.get("results", []):
                 props = item.get("properties") or {}
                 if phones_match(phone, props.get("phone"), default_country_code):
                     results[str(item.get("id"))] = item
+
+        # 1) Ricerca deterministica: filtro sulla proprietà `phone` (CONTAINS_TOKEN)
+        #    sui varianti E.164 — affidabile dove la query testuale fallisce.
+        #    Ogni variante = un filterGroup (in OR); HubSpot ne accetta fino a 5.
+        groups = [{"filters": [{"propertyName": "phone", "operator": "CONTAINS_TOKEN", "value": v}]}
+                  for v in variants[:5]]
+        if groups:
+            try:
+                _absorb(self._post("/crm/v3/objects/companies/search", {
+                    "filterGroups": groups, "limit": 100, "properties": list(self.COMPANY_PROPERTIES),
+                }))
+            except HubSpotError:
+                logger.warning("hubspot_error company_phone_filter_search_failed")
+
+        # 2) Fallback: ricerca testuale storica (copre numeri fuori dal campo phone)
+        for candidate in variants:
+            try:
+                _absorb(self._post("/crm/v3/objects/companies/search", {
+                    "query": candidate, "limit": 100, "properties": list(self.COMPANY_PROPERTIES),
+                }))
+            except HubSpotError:
+                continue
         return list(results.values())
 
     COMMERCIAL_PIPELINE_LABEL = "Richieste commerciali"
