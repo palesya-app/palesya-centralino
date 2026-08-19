@@ -377,6 +377,20 @@ def test_upsert_ticket_includes_client_info(service):
     assert "Segnalato da: Mario Rossi" in ticket["content"]
 
 
+def test_create_web_ticket_structured(service):
+    system, fake = service
+    r = system.create_web_ticket(name="Mario Rossi", company_name="Example SRL",
+                                 email="mario@example.it", phone="+393331234567",
+                                 description="Il tornello non apre da stamattina")
+    assert r["ok"] is True and r["ticket_id"]
+    t = fake.tickets[r["ticket_id"]]["properties"]
+    assert "SEGNALAZIONE ASSISTENZA PALESYA" in t["content"]
+    assert "Origine:      Web (form assistenza)" in t["content"]
+    assert "Mario Rossi" in t["content"]
+    assert t["ticket_source"] == "web"
+    assert t["support_issue_category"] == "turnstile"
+
+
 def test_upsert_ticket_explicit_fields_win_over_inference(service):
     system, fake = service
     result = system.upsert_ticket(

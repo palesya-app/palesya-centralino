@@ -161,6 +161,12 @@ class SupportService:
             con.close()
 
     SEVERITY_TO_PRIORITY = {"low": "LOW", "medium": "MEDIUM", "high": "HIGH", "critical": "URGENT"}
+    CATEGORY_LABELS = {
+        "access_control": "Controllo accessi", "turnstile": "Tornelli/varchi",
+        "software": "Software/gestionale", "billing": "Fatturazione/pagamenti",
+        "configuration": "Configurazione", "migration": "Migrazione dati",
+        "hardware": "Hardware", "other": "Altro",
+    }
 
     # Inferenza categoria da descrizione libera: l'agente vocale non deve più
     # classificare a mano. Ordine = priorità (la prima categoria che matcha vince).
@@ -205,12 +211,33 @@ class SupportService:
         company = call.get("company_name") or "Cliente sconosciuto"
         contact_name = (contact_name or "").strip()
         who = "{} · {}".format(company, contact_name) if contact_name else company
-        # Testata con le info del cliente sempre in evidenza sul ticket.
-        header = "Segnalato da: {}{}\nTelefono: {}\n\n".format(
-            contact_name or "—", " ({})".format(company) if company else "", call.get("caller_phone") or "—")
+        # Scheda ticket strutturata, ordinata e leggibile a colpo d'occhio.
+        cat_label = self.CATEGORY_LABELS.get(category, (category or "other").title())
+        sev_label = {"low": "Bassa", "medium": "Media", "high": "Alta", "critical": "Critica"}.get(severity, "")
+        origin_label = {"ai_phone": "Telefono (AI)", "web": "Web (form assistenza)",
+                        "manual": "Manuale", "email": "Email", "whatsapp": "WhatsApp"}.get(source, source)
+        lines = ["SEGNALAZIONE ASSISTENZA PALESYA", "",
+                 "Cliente:      {}".format(company)]
+        if contact_name:
+            lines.append("Segnalato da: {}".format(contact_name))
+        lines.append("Telefono:     {}".format(call.get("caller_phone") or "—"))
+        if call.get("caller_email"):
+            lines.append("Email:        {}".format(call.get("caller_email")))
+        lines.append("Origine:      {}".format(origin_label))
+        lines.append("Categoria:    {}".format(cat_label))
+        if sev_label:
+            lines.append("Gravità:      {}".format(sev_label))
+        lines += ["", "PROBLEMA:", (summary or "Richiesta assistenza")]
+        if troubleshooting:
+            lines += ["", "PASSI GIÀ TENTATI:", troubleshooting]
+        if device:
+            lines += ["", "Dispositivo: {}".format(device)]
+        if escalation_reason:
+            lines += ["", "Motivo escalation: {}".format(escalation_reason)]
+        content = "\n".join(lines)
         props = {
-            "subject": "[AI Support] {} — {}".format(who, (summary or "richiesta assistenza")[:120]),
-            "content": header + (summary or "Chiamata assistenza telefonica"),
+            "subject": "[{}] {} — {}".format(cat_label, who, (summary or "richiesta assistenza")[:100]),
+            "content": content,
             "ticket_source": source,
             "support_consumed": "true" if support_consumed else "false",
             "caller_phone": call.get("caller_phone") or "",
@@ -1039,6 +1066,57 @@ class SupportService:
                 "contact_name": contact_name or None,
                 "category": category, "severity": severity,
                 "existing_open_tickets": [str(item.get("id")) for item in open_tickets]}
+
+    def create_web_ticket(self, name="", company_name="", email="", phone="", category="", description=""):
+        """Apre un ticket dal form web (area personale/piattaforma) su HubSpot.
+
+        Riconosce l'azienda dal numero o dal nome, deduce categoria/gravità dalla
+        descrizione, e crea un ticket ordinato con origine 'web'.
+        """
+        import uuid
+        description = str(description or "").strip()
+        if not description:
+            raise ValueError("descrizione obbligatoria")
+        name = str(name or "").strip()
+        company_name = str(company_name or "").strip()
+        email = str(email or "").strip()
+        normalized = normalize_phone(phone, self.support_config.default_country_code) if phone else ""
+        category = str(category or "").strip().lower()
+        if category not in self.CATEGORY_LABELS:
+            category = self._infer_category(description)
+        severity = self._infer_severity(description)
+        company_id, contact_id, resolved_company = None, None, company_name
+        if normalized:
+            try:
+                _, ctx = self._call_context(normalized)
+                if ctx.get("company_id"):
+                    company_id = ctx.get("company_id"); contact_id = ctx.get("contact_id")
+                    resolved_company = ctx.get("company_name") or company_name
+            except Exception:
+                logger.warning("web_ticket lookup_by_phone_failed")
+        if not company_id and company_name:
+            try:
+                companies = self.hubspot.search_companies_by_name(company_name)
+                unique = {str(item.get("id")): item for item in companies if item.get("id")}
+                if len(unique) == 1:
+                    company = next(iter(unique.values()))
+                    company_id = str(company.get("id"))
+                    resolved_company = (company.get("properties") or {}).get("name") or company_name
+            except Exception:
+                logger.warning("web_ticket resolve_company_by_name_failed")
+        call_id = "web_" + uuid.uuid4().hex[:16]
+        call = {"call_id": call_id, "caller_phone": normalized, "caller_email": email,
+                "company_id": company_id, "contact_id": contact_id,
+                "company_name": resolved_company or "Cliente sconosciuto",
+                "customer_match_status": "found" if company_id else "not_found"}
+        ticket_id = self._ensure_ticket(call)
+        self.hubspot.update_ticket(ticket_id, self._ticket_properties(
+            call, support_consumed=False, summary=description, category=category, status="new",
+            source="web", match_status=call["customer_match_status"], severity=severity,
+            contact_name=name))
+        logger.info("web_ticket_created company_present=%s category=%s", bool(company_id), category)
+        return {"ok": True, "ticket_id": ticket_id, "category": category, "severity": severity,
+                "company_name": resolved_company or None, "customer_found": bool(company_id)}
 
     def reverse_consumption(self, call_id, actor="admin"):
         con = self._conn()

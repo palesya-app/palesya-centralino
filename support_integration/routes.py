@@ -4,7 +4,7 @@ import threading
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 
 import security
 from lan_config import is_loopback
@@ -69,8 +69,99 @@ def _field(body, request, *keys):
     return ""
 
 
+ASSISTENZA_FORM_HTML = """<!doctype html>
+<html lang="it"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistenza Palesya</title>
+<style>
+ :root{--bg:#0f1220;--card:#fff;--ink:#1a1f2e;--muted:#6b7280;--brand:#2f6bff;--ok:#0f9d58;--line:#e5e7eb}
+ *{box-sizing:border-box} body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  background:linear-gradient(135deg,#1b2140,#0f1220);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--ink)}
+ .card{background:var(--card);width:100%;max-width:560px;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.35);padding:28px}
+ h1{margin:0 0 4px;font-size:22px} .sub{color:var(--muted);margin:0 0 20px;font-size:14px}
+ label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
+ input,select,textarea{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff}
+ textarea{min-height:110px;resize:vertical} .row{display:flex;gap:12px} .row>div{flex:1}
+ .hp{position:absolute;left:-9999px} button{margin-top:20px;width:100%;background:var(--brand);color:#fff;border:0;
+  padding:14px;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer} button:disabled{opacity:.6;cursor:default}
+ .msg{margin-top:16px;padding:14px;border-radius:10px;font-size:14px;display:none}
+ .msg.ok{background:#e7f6ee;color:#0f6b3d;display:block} .msg.err{background:#fdecec;color:#b3261e;display:block}
+ .foot{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}
+</style></head><body>
+<div class="card">
+ <h1>Assistenza Palesya</h1>
+ <p class="sub">Compila il modulo: apriamo subito una segnalazione e il team tecnico ti ricontatta.</p>
+ <form id="f">
+  <div class="row"><div><label>Nome e cognome</label><input name="name" autocomplete="name" required></div>
+   <div><label>Palestra / struttura</label><input name="company_name" required></div></div>
+  <div class="row"><div><label>Email</label><input type="email" name="email" autocomplete="email"></div>
+   <div><label>Telefono</label><input name="phone" autocomplete="tel"></div></div>
+  <label>Tipo di problema</label>
+  <select name="category">
+   <option value="">Rilevalo automaticamente</option>
+   <option value="software">Software / gestionale</option>
+   <option value="access_control">Controllo accessi / tessere</option>
+   <option value="turnstile">Tornelli / varchi</option>
+   <option value="hardware">Hardware (stampante, lettore, PC...)</option>
+   <option value="billing">Fatturazione / pagamenti</option>
+   <option value="configuration">Configurazione</option>
+   <option value="migration">Migrazione dati</option>
+   <option value="other">Altro</option>
+  </select>
+  <label>Descrivi il problema</label>
+  <textarea name="description" required placeholder="Cosa non funziona, da quando, cosa hai gia' provato..."></textarea>
+  <input class="hp" name="website" tabindex="-1" autocomplete="off">
+  <button type="submit" id="btn">Apri la segnalazione</button>
+ </form>
+ <div id="msg" class="msg"></div>
+ <div class="foot">Palesya — assistenza clienti</div>
+</div>
+<script>
+ const f=document.getElementById('f'),btn=document.getElementById('btn'),msg=document.getElementById('msg');
+ f.addEventListener('submit',async e=>{e.preventDefault();btn.disabled=true;btn.textContent='Invio...';msg.className='msg';
+  const d=Object.fromEntries(new FormData(f).entries());
+  try{const r=await fetch('/api/web/ticket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+   const j=await r.json();
+   if(r.ok&&j.ok){msg.className='msg ok';msg.textContent='Segnalazione aperta! Numero ticket '+j.ticket_id+'. Ti ricontattiamo al piu\\' presto.';f.reset();}
+   else{msg.className='msg err';msg.textContent='Non e\\' stato possibile inviare: '+(j.error||'riprova piu\\' tardi')+'.';}
+  }catch(_){msg.className='msg err';msg.textContent='Errore di rete, riprova.';}
+  btn.disabled=false;btn.textContent='Apri la segnalazione';});
+</script></body></html>"""
+
+
 def build_router():
     router = APIRouter()
+
+    @router.get("/assistenza")
+    async def assistenza_form():
+        return HTMLResponse(ASSISTENZA_FORM_HTML)
+
+    @router.post("/api/web/ticket")
+    async def web_ticket(request: Request):
+        # Endpoint pubblico del form assistenza (nessun segreto lato client).
+        if _rate_limited(request, 30):
+            return JSONResponse({"ok": False, "error": "troppe richieste, riprova tra poco"}, status_code=429)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "dati non validi"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "dati non validi"}, status_code=400)
+        if str(body.get("website") or "").strip():  # honeypot anti-bot
+            return {"ok": True, "ticket_id": "—"}
+        description = str(body.get("description") or "").strip()
+        if len(description) < 5:
+            return JSONResponse({"ok": False, "error": "descrivi meglio il problema"}, status_code=400)
+        try:
+            return service.create_web_ticket(
+                name=str(body.get("name") or "")[:120], company_name=str(body.get("company_name") or "")[:200],
+                email=str(body.get("email") or "")[:200], phone=str(body.get("phone") or "")[:40],
+                category=str(body.get("category") or ""), description=description[:5000],
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "servizio non disponibile"}, status_code=503)
 
     @router.post("/api/webhooks/telnyx")
     async def telnyx_webhook(request: Request, background_tasks: BackgroundTasks):
