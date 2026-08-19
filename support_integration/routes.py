@@ -73,24 +73,34 @@ ASSISTENZA_FORM_HTML = """<!doctype html>
 <html lang="it"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Assistenza Palesya</title>
+<link rel="icon" href="https://palesya.it/static/palesya-mark.png">
 <style>
- :root{--bg:#0f1220;--card:#fff;--ink:#1a1f2e;--muted:#6b7280;--brand:#2f6bff;--ok:#0f9d58;--line:#e5e7eb}
+ :root{--ink:#0a0a0a;--muted:#6b6b6b;--brand:#000;--ok:#0f7a3d;--err:#b3261e;--line:#e3e3e3;--bg:#f5f5f5}
  *{box-sizing:border-box} body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-  background:linear-gradient(135deg,#1b2140,#0f1220);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--ink)}
- .card{background:var(--card);width:100%;max-width:560px;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.35);padding:28px}
- h1{margin:0 0 4px;font-size:22px} .sub{color:var(--muted);margin:0 0 20px;font-size:14px}
+  background:var(--bg);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--ink)}
+ .card{background:#fff;width:100%;max-width:560px;border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 8px 30px rgba(0,0,0,.06);padding:32px}
+ .brand{display:flex;align-items:center;gap:12px;margin-bottom:22px;padding-bottom:20px;border-bottom:1px solid var(--line)}
+ .brand img{height:34px;width:auto} .brand .t{font-size:15px;font-weight:700;letter-spacing:.02em}
+ .brand .t small{display:block;font-weight:500;color:var(--muted);font-size:12px;letter-spacing:0}
+ h1{margin:0 0 4px;font-size:21px;font-weight:700} .sub{color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.5}
  label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
- input,select,textarea{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff}
+ input,select,textarea{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:var(--ink);transition:border-color .15s}
+ input:focus,select:focus,textarea:focus{outline:none;border-color:#000}
  textarea{min-height:110px;resize:vertical} .row{display:flex;gap:12px} .row>div{flex:1}
- .hp{position:absolute;left:-9999px} button{margin-top:20px;width:100%;background:var(--brand);color:#fff;border:0;
-  padding:14px;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer} button:disabled{opacity:.6;cursor:default}
+ @media(max-width:460px){.row{flex-direction:column;gap:0}}
+ .hp{position:absolute;left:-9999px} button{margin-top:22px;width:100%;background:var(--brand);color:#fff;border:0;
+  padding:15px;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer;transition:opacity .15s}
+ button:hover{opacity:.88} button:disabled{opacity:.5;cursor:default}
  .msg{margin-top:16px;padding:14px;border-radius:10px;font-size:14px;display:none}
- .msg.ok{background:#e7f6ee;color:#0f6b3d;display:block} .msg.err{background:#fdecec;color:#b3261e;display:block}
- .foot{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}
+ .msg.ok{background:#eaf6ef;color:var(--ok);display:block} .msg.err{background:#fdecec;color:var(--err);display:block}
+ .foot{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
 </style></head><body>
 <div class="card">
- <h1>Assistenza Palesya</h1>
- <p class="sub">Compila il modulo: apriamo subito una segnalazione e il team tecnico ti ricontatta.</p>
+ <div class="brand"><img src="https://palesya.it/static/palesya-mark.png" alt="Palesya"
+   onerror="this.style.display='none'"><div class="t">Palesya<small>Assistenza clienti</small></div></div>
+ <h1>Apri una segnalazione</h1>
+ <p class="sub">Compila il modulo: apriamo subito il ticket e il team tecnico ti ricontatta.</p>
  <form id="f">
   <div class="row"><div><label>Nome e cognome</label><input name="name" autocomplete="name" required></div>
    <div><label>Palestra / struttura</label><input name="company_name" required></div></div>
