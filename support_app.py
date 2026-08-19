@@ -10,6 +10,7 @@ Avvio:  uvicorn support_app:app --host 0.0.0.0 --port ${PORT:-8080}
 import os
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from schema import ensure_schema
@@ -24,6 +25,16 @@ ensure_schema(DB_TARGET)
 app = FastAPI(
     title="Palesya AI Support",
     docs_url=None, redoc_url=None, openapi_url=None,  # nessuna superficie pubblica extra
+)
+# CORS: consente al form assistenza di essere incollato su qualsiasi pagina della
+# piattaforma (POST cross-origin verso /api/web/ticket). Gli endpoint firmati
+# restano protetti dalla firma a prescindere dal CORS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+    allow_credentials=False,
 )
 app.include_router(build_router())
 
