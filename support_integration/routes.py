@@ -75,30 +75,39 @@ ASSISTENZA_FORM_HTML = """<!doctype html>
 <title>Assistenza Palesya</title>
 <link rel="icon" href="https://palesya.it/static/palesya-mark.png">
 <style>
- :root{--ink:#0a0a0a;--muted:#6b6b6b;--brand:#000;--ok:#0f7a3d;--err:#b3261e;--line:#e3e3e3;--bg:#f5f5f5}
+ :root{--ink:#12261a;--muted:#5b6b60;--brand:#1a8f4e;--brand-dark:#0e3d24;--lime:#a4d65e;
+   --ok:#0f7a3d;--err:#b3261e;--line:#dbe6de;--bg:#eef4ef}
  *{box-sizing:border-box} body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
   background:var(--bg);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--ink)}
  .card{background:#fff;width:100%;max-width:560px;border:1px solid var(--line);border-radius:16px;
   box-shadow:0 8px 30px rgba(0,0,0,.06);padding:32px}
  .brand{display:flex;align-items:center;gap:12px;margin-bottom:22px;padding-bottom:20px;border-bottom:1px solid var(--line)}
- .brand img{height:34px;width:auto} .brand .t{font-size:15px;font-weight:700;letter-spacing:.02em}
+ .brand img{height:34px;width:auto} .brand .t{font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--brand-dark)}
  .brand .t small{display:block;font-weight:500;color:var(--muted);font-size:12px;letter-spacing:0}
- h1{margin:0 0 4px;font-size:21px;font-weight:700} .sub{color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.5}
+ h1{margin:0 0 4px;font-size:21px;font-weight:700;color:var(--brand-dark)} .sub{color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.5}
  label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
  input,select,textarea{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:var(--ink);transition:border-color .15s}
- input:focus,select:focus,textarea:focus{outline:none;border-color:#000}
+ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(26,143,78,.12)}
  textarea{min-height:110px;resize:vertical} .row{display:flex;gap:12px} .row>div{flex:1}
  @media(max-width:460px){.row{flex-direction:column;gap:0}}
  .hp{position:absolute;left:-9999px} button{margin-top:22px;width:100%;background:var(--brand);color:#fff;border:0;
   padding:15px;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer;transition:opacity .15s}
- button:hover{opacity:.88} button:disabled{opacity:.5;cursor:default}
+ button:hover{background:var(--brand-dark)} button:disabled{opacity:.5;cursor:default}
  .msg{margin-top:16px;padding:14px;border-radius:10px;font-size:14px;display:none}
  .msg.ok{background:#eaf6ef;color:var(--ok);display:block} .msg.err{background:#fdecec;color:var(--err);display:block}
  .foot{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
 </style></head><body>
 <div class="card">
- <div class="brand"><img src="https://palesya.it/static/palesya-mark.png" alt="Palesya"
-   onerror="this.style.display='none'"><div class="t">Palesya<small>Assistenza clienti</small></div></div>
+ <div class="brand">
+   <svg width="40" height="40" viewBox="0 0 100 100" aria-label="Palesya">
+     <polygon points="50,5 89,27 89,73 50,95 11,73 11,27" fill="#0e3d24"/>
+     <polygon points="50,20 76,35 76,65 50,80 24,65 24,35" fill="#1a8f4e"/>
+     <path d="M11,64 L50,86 L89,64 L89,74 L50,96 L11,74 Z" fill="#a4d65e"/>
+     <rect x="35" y="35" width="7" height="30" rx="2" fill="#fff"/>
+     <rect x="58" y="35" width="7" height="30" rx="2" fill="#fff"/>
+     <rect x="35" y="46" width="30" height="7" rx="2" fill="#fff"/>
+   </svg>
+   <div class="t">Palesya<small>Assistenza clienti</small></div></div>
  <h1>Apri una segnalazione</h1>
  <p class="sub">Compila il modulo: apriamo subito il ticket e il team tecnico ti ricontatta.</p>
  <form id="f">
