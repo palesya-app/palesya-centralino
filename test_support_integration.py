@@ -377,6 +377,25 @@ def test_upsert_ticket_includes_client_info(service):
     assert "Segnalato da: Mario Rossi" in ticket["content"]
 
 
+def test_severity_floor_for_access_categories(service):
+    system, _ = service
+    # tornello/accessi: pavimento minimo "high" anche se il testo sembra blando
+    assert system._severity_floor("turnstile", "medium") == "high"
+    assert system._severity_floor("access_control", "low") == "high"
+    # critico resta critico; altre categorie invariate
+    assert system._severity_floor("turnstile", "critical") == "critical"
+    assert system._severity_floor("software", "medium") == "medium"
+
+
+def test_upsert_ticket_turnstile_is_high(service):
+    system, fake = service
+    r = system.upsert_ticket("floor-1", phone="+393331234567",
+                             description="Il tornello ogni tanto non apre")
+    t = fake.tickets[r["ticket_id"]]["properties"]
+    assert t["support_issue_category"] == "turnstile"
+    assert t["support_severity"] == "high"
+
+
 def test_create_web_ticket_structured(service):
     system, fake = service
     r = system.create_web_ticket(name="Mario Rossi", company_name="Example SRL",

@@ -203,6 +203,19 @@ class SupportService:
                 return severity
         return "medium"
 
+    # Categorie che bloccano l'operatività della struttura (varco/accessi): un
+    # problema qui = clienti che non entrano = urgente. Priorità minima "alta".
+    _SEVERITY_FLOOR = {"turnstile": "high", "access_control": "high"}
+
+    @classmethod
+    def _severity_floor(cls, category, severity):
+        order = ["low", "medium", "high", "critical"]
+        floor = cls._SEVERITY_FLOOR.get(category)
+        if not floor:
+            return severity or "medium"
+        cur = severity if severity in order else "medium"
+        return floor if order.index(cur) < order.index(floor) else cur
+
     def _ticket_properties(self, call, *, support_consumed=False, before=None, after=None,
                            reason=None, summary="", resolution="", category="other",
                            status="new", source="ai_phone", match_status="unknown", duration=None,
@@ -1008,6 +1021,7 @@ class SupportService:
         severity = str(severity or "").strip().lower()
         if not severity:
             severity = self._infer_severity(classify_text)
+        severity = self._severity_floor(category, severity)
         session = self._session(call_id)
         if not session and phone:
             session = self._ensure_voice_session(call_id, {
@@ -1084,7 +1098,7 @@ class SupportService:
         category = str(category or "").strip().lower()
         if category not in self.CATEGORY_LABELS:
             category = self._infer_category(description)
-        severity = self._infer_severity(description)
+        severity = self._severity_floor(category, self._infer_severity(description))
         company_id, contact_id, resolved_company = None, None, company_name
         if normalized:
             try:
