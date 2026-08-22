@@ -759,6 +759,46 @@ class HubSpotClient:
             output.append({"to": {"id": str(record_id)}, "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": int(association_type_id)}]})
         return output
 
+    def _won_deal_stages(self):
+        """ID delle fasi 'vinto' (chiuse con probabilità 1) del pipeline Deals."""
+        if getattr(self, "_won_stages_cache", None) is not None:
+            return self._won_stages_cache
+        won = set()
+        try:
+            for p in self._get("/crm/v3/pipelines/deals").get("results", []):
+                for s in p.get("stages", []):
+                    m = s.get("metadata") or {}
+                    label = str(s.get("label", "")).strip().lower()
+                    is_closed = str(m.get("isClosed")).lower() == "true"
+                    prob = str(m.get("probability"))
+                    if (is_closed and prob in ("1.0", "1")) or label in ("chiuso vinto", "closed won", "vinto"):
+                        won.add(str(s.get("id")))
+        except HubSpotError:
+            logger.warning("hubspot_error won_stages_read_failed")
+        self._won_stages_cache = won
+        return won
+
+    def company_has_won_deal(self, company_id):
+        """True se l'azienda ha almeno una trattativa in fase 'vinto' (cliente confermato)."""
+        won = self._won_deal_stages()
+        if not company_id or not won:
+            return False
+        try:
+            assoc = self._get("/crm/v4/objects/companies/{}/associations/deals".format(company_id),
+                              {"limit": 100}).get("results", [])
+            deal_ids = [str(a.get("toObjectId")) for a in assoc if a.get("toObjectId")]
+            if not deal_ids:
+                return False
+            resp = self._post("/crm/v3/objects/deals/batch/read",
+                              {"properties": ["dealstage"], "inputs": [{"id": d} for d in deal_ids]})
+            for r in resp.get("results", []):
+                if str((r.get("properties") or {}).get("dealstage")) in won:
+                    return True
+            return False
+        except HubSpotError:
+            logger.warning("hubspot_error won_deal_check_failed")
+            return False
+
     def update_company(self, company_id, properties):
         return self._patch("/crm/v3/objects/companies/{}".format(company_id), {"properties": properties})
 

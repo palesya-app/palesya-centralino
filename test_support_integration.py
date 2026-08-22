@@ -36,6 +36,13 @@ class FakeHubSpot:
         self.ticket_counter = 0
         self.renewal_tasks = []
         self.fail_company_update_once = False
+        self.has_won_deal = True
+
+    def company_has_won_deal(self, company_id):
+        return bool(company_id) and self.has_won_deal
+
+    def get_contact(self, contact_id):
+        return {"id": contact_id, "properties": {"firstname": "Mario", "lastname": "Rossi"}}
 
     def lookup_customer(self, phone, default_country_code):
         return {
@@ -375,6 +382,16 @@ def test_upsert_ticket_includes_client_info(service):
     ticket = fake.tickets[result["ticket_id"]]["properties"]
     assert "Mario Rossi" in ticket["subject"]
     assert "Segnalato da: Mario Rossi" in ticket["content"]
+
+
+def test_eligibility_requires_won_deal(service):
+    system, fake = service
+    fake.has_won_deal = True
+    r = system.verify_customer(phone="+393331234567")
+    assert r["is_won_customer"] is True and r["eligible_for_support"] is True
+    fake.has_won_deal = False
+    r2 = system.verify_customer(phone="+393331234567")
+    assert r2["is_won_customer"] is False and r2["eligible_for_support"] is False
 
 
 def test_severity_floor_for_access_categories(service):

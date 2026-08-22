@@ -767,11 +767,14 @@ class SupportService:
     def _eligibility(self, phone, context):
         """Determina se il chiamante è un cliente idoneo all'assistenza.
 
-        Oggi: idoneo = Azienda riconosciuta in HubSpot (chi ha acquistato ha una
-        Company). Estensibile al check Deals quando lo scope sarà attivo.
+        REGOLA (2026-08-18): cliente idoneo = azienda riconosciuta CON una trattativa
+        'Chiuso Vinto' nel pipeline. Chi non è vinto (prospect) NON è idoneo e va
+        instradato al commerciale.
         """
         status = context.get("customer_match_status")
-        eligible = bool(status == "found" and context.get("company_id"))
+        company_id = context.get("company_id")
+        is_won = bool(company_id and self.hubspot.company_has_won_deal(company_id))
+        eligible = bool(status == "found" and company_id and is_won)
         open_tickets = []
         ai_usage = self._ai_usage_from_props({})
         if context.get("company_id"):
@@ -787,6 +790,7 @@ class SupportService:
         return {
             "caller_phone": phone,
             "eligible_for_support": eligible,
+            "is_won_customer": is_won,
             "open_tickets_count": len(open_tickets),
             **ai_usage,
             **{key: context.get(key) for key in (
