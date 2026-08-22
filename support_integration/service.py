@@ -207,6 +207,18 @@ class SupportService:
     # problema qui = clienti che non entrano = urgente. Priorità minima "alta".
     _SEVERITY_FLOOR = {"turnstile": "high", "access_control": "high"}
 
+    def _contact_display_name(self, contact_id):
+        """Nome+cognome del contatto da HubSpot (per riempire 'Segnalato da' quando
+        il cliente è riconosciuto ma il nome non è stato dettato)."""
+        if not contact_id:
+            return ""
+        try:
+            props = (self.hubspot.get_contact(contact_id) or {}).get("properties") or {}
+            return " ".join(filter(None, [props.get("firstname"), props.get("lastname")])).strip()
+        except Exception:
+            logger.warning("hubspot_error get_contact_name_failed")
+            return ""
+
     @classmethod
     def _severity_floor(cls, category, severity):
         order = ["low", "medium", "high", "critical"]
@@ -1051,6 +1063,9 @@ class SupportService:
         if sess_company in (None, "", "Unknown Caller", "Cliente sconosciuto"):
             sess_company = None
         display_company = sess_company or company_name
+        # Nome persona: se non dettato, recuperalo dal contatto riconosciuto in HubSpot.
+        if not contact_name and session.get("CONTACT_ID"):
+            contact_name = self._contact_display_name(session.get("CONTACT_ID"))
         open_tickets = []
         if session.get("COMPANY_ID"):
             open_tickets = self.hubspot.find_open_tickets_by_company(session["COMPANY_ID"], category)
@@ -1106,6 +1121,8 @@ class SupportService:
                 if ctx.get("company_id"):
                     company_id = ctx.get("company_id"); contact_id = ctx.get("contact_id")
                     resolved_company = ctx.get("company_name") or company_name
+                    if not name and ctx.get("contact_name"):
+                        name = ctx.get("contact_name")
             except Exception:
                 logger.warning("web_ticket lookup_by_phone_failed")
         if not company_id and company_name:
@@ -1118,6 +1135,8 @@ class SupportService:
                     resolved_company = (company.get("properties") or {}).get("name") or company_name
             except Exception:
                 logger.warning("web_ticket resolve_company_by_name_failed")
+        if not name and contact_id:
+            name = self._contact_display_name(contact_id)
         call_id = "web_" + uuid.uuid4().hex[:16]
         call = {"call_id": call_id, "caller_phone": normalized, "caller_email": email,
                 "company_id": company_id, "contact_id": contact_id,
