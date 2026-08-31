@@ -134,6 +134,13 @@ via `/api/finance/overview` (admin, header `x-support-admin-secret`).
   "ti passo un collega" ma NON trasferiva). Collegato `human_escalation → transfer_call`
   (+39 378 405 7222) in tutti e 3 i flussi.
 - Backend: **42/42 test verdi**.
+- **Prompt Alberto snellito** (14.4k → 5.3k caratteri, −63%): rimossi i riferimenti a 5
+  strumenti INESISTENTI (identify_site, get_installation_status, request_support_session,
+  send_help_steps, get_ticket_status) e le procedure per-funzione duplicate (già nella KB
+  tecnica, che viene recuperata via RAG). Preservate integralmente: regole di sicurezza,
+  persona, triage/priorità, regola di verifica, trasferimento, chiusura, parlato/lingua.
+  Effetto: meno latenza per turno, meno costo, meno rischio di "strumenti simulati".
+  (Le procedure passo-passo restano nella KB `knowledge_base_8608f2e8e5182cdc`.)
 
 ## 6. Identificatori Retell
 
