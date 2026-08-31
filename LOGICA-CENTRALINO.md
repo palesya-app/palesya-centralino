@@ -80,6 +80,15 @@ NB: la libreria condivisa di Retell (300 voci) non ha voci con accento nativo it
 - **Keep-alive** consigliato: monitor HTTP su `/health` ogni ~5 min (UptimeRobot) per
   evitare il cold-start di Render (piano free) alla prima chiamata.
 
+**Comprensione del parlato (turn-taking & STT):**
+- `responsiveness = 0.7` — l'AI aspetta che il chiamante finisca (non taglia la parola,
+  es. mentre dice il nome della palestra). NB: alzarlo troppo (1.0) fa partire l'AI troppo
+  presto → "non mi fa parlare".
+- `boosted_keywords` = nomi reali delle palestre (da HubSpot) + termini Palesya (tornello,
+  check-in, abbonamento, planning, socio, ricevuta, backup, area personale, …) → lo STT
+  riconosce i nomi propri invece di storpiarli → niente loop sul riconoscimento.
+- `interruption_sensitivity = 0.85` (il chiamante può interrompere ed essere ascoltato).
+
 ## 5b. Come tutto finisce su HubSpot (reporting & gestione)
 
 **Ticket di assistenza** (da Alberto e dal form web) — `service._ticket_properties` +
