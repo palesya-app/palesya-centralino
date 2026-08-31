@@ -58,8 +58,12 @@ Ascolta l'esigenza, dà info prodotto dalla KB commerciale, registra il lead
 | **Alberto**| tecnica      | `11labs-Lucas` ♂    | **provvisoria** (vedi sotto) |
 | Mariarosia | commerciale  | `11labs-Zuri` ♀     | provvisoria |
 
-**Voci ElevenLabs richieste (da importare):** Alberto = "Alberto Loco"
-(`gRvYX74pTqIZPvUtIqog`), commerciale = `uV2Bhcm1HwmAqPqkbjfl`. Queste vivono nella
+L'AI si chiama **solo "Alberto"** (mai altri suffissi): è il nome dell'agente, del saluto e
+di tutti i prompt.
+
+**Voci ElevenLabs richieste (da importare):** per Alberto la voce con ID
+`gRvYX74pTqIZPvUtIqog` (da **etichettare in Retell semplicemente "Alberto"**), per la
+commerciale la voce `uV2Bhcm1HwmAqPqkbjfl`. Queste vivono nella
 **Voice Library di ElevenLabs**, non nel set curato di Retell → **non importabili via API**.
 Per usarle serve collegare **una volta** la API key ElevenLabs nella dashboard Retell
 (Agent → Voice → *Add custom voice → ElevenLabs → Voice ID*) e poi assegnarle agli agenti.
