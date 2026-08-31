@@ -72,11 +72,53 @@ NB: la libreria condivisa di Retell (300 voci) non ha voci con accento nativo it
 ## 5. Velocità / fluidità
 
 - LLM dei flow: `gpt-4.1-mini` (cascading) — più veloce di `gpt-4.1`.
+- TTS: `eleven_flash_v2_5` (modello ElevenLabs a bassa latenza, it-IT) — era
+  `eleven_multilingual_v2` (più lento).
 - Agenti: `responsiveness = 1.0`, `voice_speed = 1.05`.
 - Nodi function di verifica: `speak_during_execution = true` (niente silenzi morti mentre
   interroga il backend).
 - **Keep-alive** consigliato: monitor HTTP su `/health` ogni ~5 min (UptimeRobot) per
   evitare il cold-start di Render (piano free) alla prima chiamata.
+
+## 5b. Come tutto finisce su HubSpot (reporting & gestione)
+
+**Ticket di assistenza** (da Alberto e dal form web) — `service._ticket_properties` +
+`hubspot.create_ticket`:
+- Subject: `[Categoria] Azienda · Nome — sintesi`.
+- Corpo strutturato: Cliente / Segnalato da / Telefono (dal caller-ID, automatico) /
+  Email / Origine / Categoria / Gravità / PROBLEMA / Passi tentati.
+- Proprietà dedicate (gruppo "Assistenza Palesya"): `support_issue_category`,
+  `support_severity`, `support_resolution_status`, `customer_match_status`,
+  `voice_ai_call_id`, `hs_ticket_priority`, ecc.
+- **Categoria e gravità dedotte dal backend** (`_infer_category`/`_infer_severity`, per
+  keyword) — l'AI passa solo la descrizione. Floor di gravità **ALTA** per varchi/controllo
+  accessi (`turnstile`/`access_control`): varco bloccato = urgente.
+- **Associazioni**: il ticket è legato ad **Azienda** + **Contatto** riconosciuti
+  (`_associations`, typeId corretti per ticket/task/call/deal). Idempotente per `call_id`
+  (`find_ticket_by_call_id` evita duplicati).
+- Nome persona: auto da HubSpot (`get_contact`) quando il cliente è riconosciuto.
+
+**Lead commerciali** (da Mariarosia) → `create_callback` registra un task/callback su
+HubSpot, legato all'azienda se riconosciuta (i lead spesso non sono ancora clienti).
+
+**Chiamate** → loggate come oggetto Call nativo, associate ad azienda/contatto.
+
+**Riconoscimento cliente** → `verify_customer`: prima dal Caller-ID (filtro
+`phone CONTAINS_TOKEN` sulle varianti E.164), poi dal nome struttura; una singola azienda
+riconosciuta dal numero vince (resta "ambiguous" solo se più aziende condividono il numero).
+
+**Pagamenti / finanza** (gestione interna, l'AI NON li legge): gruppo Company
+"Pagamenti Clienti" (`pag_*`); **Uscite** su Ticket (`uscita_*`); overview entrate−uscite
+via `/api/finance/overview` (admin, header `x-support-admin-secret`).
+
+## 6. Robustezza (audit 2026-08-31)
+
+- Tutti e 3 i flussi: **0 edge rotti**, ogni nodo `function` ha `else_edge` (fallback su
+  timeout/errore tool → non si blocca).
+- **Fix**: il nodo `human_escalation` (richiesta persona reale) era un vicolo cieco (diceva
+  "ti passo un collega" ma NON trasferiva). Collegato `human_escalation → transfer_call`
+  (+39 378 405 7222) in tutti e 3 i flussi.
+- Backend: **42/42 test verdi**.
 
 ## 6. Identificatori Retell
 
