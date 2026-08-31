@@ -88,6 +88,12 @@ NB: la libreria condivisa di Retell (300 voci) non ha voci con accento nativo it
   check-in, abbonamento, planning, socio, ricevuta, backup, area personale, …) → lo STT
   riconosce i nomi propri invece di storpiarli → niente loop sul riconoscimento.
 - `interruption_sensitivity = 0.85` (il chiamante può interrompere ed essere ascoltato).
+- `stt_mode = "accurate"` — trascrizione più precisa del parlato.
+- `denoising_mode = "noise-cancellation"` — cancella il rumore di fondo (palestre rumorose)
+  → STT più affidabile.
+- `backchannel_frequency = 0.4` (meno "mmh/certo" mentre il cliente parla),
+  `reminder_trigger_ms = 10000` (più pazienza sui silenzi).
+- KB retrieval: `top_k = 6`, `filter_score = 0.35` (più preciso e veloce di 8/0.3).
 
 ## 5b. Come tutto finisce su HubSpot (reporting & gestione)
 
