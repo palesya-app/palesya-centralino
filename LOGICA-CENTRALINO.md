@@ -142,6 +142,56 @@ via `/api/finance/overview` (admin, header `x-support-admin-secret`).
   Effetto: meno latenza per turno, meno costo, meno rischio di "strumenti simulati".
   (Le procedure passo-passo restano nella KB `knowledge_base_8608f2e8e5182cdc`.)
 
+## 7. Smistamento intelligente e apprendimento (2026-09-04)
+
+Modulo `support_integration/triage.py`. Prima categoria e gravità uscivano da liste
+di parole chiave a "primo match vince": rigide, senza confidenza e **incapaci di
+imparare** (lo stesso errore si ripeteva all'infinito). Esempio reale di fragilità:
+*"quel coso all'entrata"* finiva in **billing**, perché "ent**rata**" contiene la
+parola chiave `rata`.
+
+**Tre livelli in cascata:**
+
+1. **regole** — le stesse parole chiave di prima: comportamento storico, nessuna
+   regressione;
+2. **modello appreso** — Naive Bayes multinomiale incrementale, in Python puro
+   (zero dipendenze nuove: su Render free ogni MB pesa sul cold-start);
+3. **fusione** — il modello scavalca la regola **solo** se ha visto abbastanza
+   esempi (≥15 totali, ≥3 per etichetta) ed è sicuro (≥0.65). Altrimenti vince la
+   regola.
+
+**Come impara.** Ogni classificazione viene registrata in `SUPPORT_TRIAGE_EVENTS`
+con la sua previsione. Quando un operatore ricategorizza, si chiama
+`POST /api/support/admin/triage/confirm` e quella riga diventa un esempio
+confermato. Il modello si riaddestra da solo alla classificazione successiva.
+
+> Regola di disciplina: il modello impara **solo da etichette confermate da un
+> umano**, mai dalle proprie previsioni — altrimenti rinforzerebbe i suoi errori.
+
+**Organizzazione delle richieste.** `recurring_issue_count` conta quante volte la
+stessa azienda ha già segnalato quella categoria (default 30 giorni): un problema
+ricorrente non è un caso isolato e viene restituito nella risposta del ticket.
+
+**Smistamento** — `POST /api/voice-ai/route` centralizza in un punto solo le regole
+oggi sparse nei prompt, con motivazione tracciabile:
+
+| Priorità | Condizione | Destinazione |
+|---|---|---|
+| 1 | chiede esplicitamente un operatore | umano |
+| 2 | ≥2 tentativi falliti | umano |
+| 3 | intento commerciale (preventivo, prezzi…) | commerciale |
+| 4 | non cliente vinto / non riconosciuto | commerciale |
+| 5 | confidenza del **modello** sotto 0.4 | umano |
+| 6 | altrimenti | tecnica (Alberto) |
+
+Il punto 5 vale **solo** quando a decidere è stato il modello: le regole sono
+deterministiche e non esprimono incertezza. Trattare la loro confidenza come 0
+avrebbe dirottato ogni chiamata su un operatore dal primo giorno (bug intercettato
+in test, coperto da regressione).
+
+**Diagnostica:** `GET /api/support/admin/triage/stats` → esempi appresi per
+etichetta, se il modello è operativo e l'accuratezza misurata sulle conferme.
+
 ## 6. Identificatori Retell
 
 - Agenti: Eleonora `agent_15c1087d7b8fd2873e707574bc`, Alberto

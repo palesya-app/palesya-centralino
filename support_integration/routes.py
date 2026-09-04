@@ -477,4 +477,71 @@ def build_router():
         except Exception:
             return JSONResponse({"ok": False, "error": "reverse_failed"}, status_code=503)
 
+    @router.post("/api/support/admin/triage/confirm")
+    async def triage_confirm(request: Request):
+        """Correzione umana della classificazione: è così che l'AI impara.
+
+        Va chiamato quando un operatore ricategorizza un ticket: da quel momento
+        il motore usa quell'esempio per le richieste simili successive.
+        """
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        user = getattr(request.state, "user", None) or {}
+        try:
+            return service.confirm_triage(
+                call_id=str(body.get("call_id") or "").strip(),
+                ticket_id=str(body.get("ticket_id") or "").strip(),
+                category=str(body.get("category") or ""),
+                severity=str(body.get("severity") or ""),
+                confirmed_by=str(user.get("USERNAME") or "admin"),
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "triage_confirm_failed"}, status_code=503)
+
+    @router.get("/api/support/admin/triage/stats")
+    async def triage_stats(request: Request):
+        """Quanto ha imparato il motore e con che accuratezza sulle conferme."""
+        if not _admin_allowed(request):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        try:
+            return {"ok": True, **service.triage_stats()}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "triage_stats_failed"}, status_code=503)
+
+    @router.post("/api/voice-ai/route")
+    async def voice_ai_route(request: Request):
+        """Smistamento: dice all'AI a chi passare la chiamata e perché.
+
+        Unifica in un punto solo le regole sparse nel flow (operatore richiesto,
+        intento commerciale, idoneità all'assistenza, incertezza) così la
+        decisione è tracciabile e testabile invece di vivere nei prompt.
+        """
+        if _rate_limited(request, 120):
+            return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        raw = await request.body()
+        if not _voice_signed(raw, request.headers):
+            return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=403)
+        try:
+            import json as _json
+            body = _json.loads(bytes(raw).decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "error": "invalid_payload"}, status_code=400)
+        text = _field(body, request, "text", "description", "request", "message")
+        try:
+            return {"ok": True, **service.route_call(
+                text,
+                phone=_field(body, request, "phone", "from_number"),
+                call_id=_field(body, request, "call_id"),
+                company_name=str(body.get("company_name") or ""),
+                failed_attempts=body.get("failed_attempts") or 0,
+            )}
+        except Exception:
+            return JSONResponse({"ok": False, "error": "route_failed"}, status_code=503)
+
     return router

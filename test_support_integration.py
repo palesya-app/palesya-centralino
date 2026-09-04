@@ -669,3 +669,145 @@ def test_telnyx_signature_and_replay_protection():
     assert verify_signature(raw, headers, base64.b64encode(public_key).decode(), now=int(timestamp))
     assert not verify_signature(raw, headers, base64.b64encode(public_key).decode(), now=int(timestamp) + 301)
     assert not verify_signature(raw, {**headers, "telnyx-signature-ed25519": "invalid"}, base64.b64encode(public_key).decode(), now=int(timestamp))
+
+
+# --- Smistamento intelligente e apprendimento -----------------------------
+
+def test_tokenizer_normalizza_accenti_e_flessioni():
+    from support_integration import triage as _triage
+    # "tornello"/"tornelli" collassano sullo stesso stem, gli accenti spariscono,
+    # le stopword non inquinano il modello.
+    assert _triage.tokenize("Il tornello") == _triage.tokenize("i tornelli")
+    assert "perche" not in _triage.tokenize("perché non funziona")
+    assert _triage.tokenize("") == []
+
+
+def test_naive_bayes_impara_e_da_confidenza():
+    from support_integration.triage import NaiveBayes
+    model = NaiveBayes()
+    assert not model.is_ready()
+    for _ in range(8):   # 16 esempi: sopra MIN_EXAMPLES_TOTAL
+        model.add("il tornello non gira e resta bloccato", "turnstile")
+        model.add("errore nella fattura e nel pagamento della rata", "billing")
+    assert model.is_ready()
+    label, confidence, _ = model.predict("tornello bloccato")
+    assert label == "turnstile" and confidence > 0.5
+
+
+def test_triage_usa_regole_finche_non_ha_imparato(service):
+    svc, _ = service
+    out = svc.classify_request("il tornello non gira")
+    assert out["category"] == "turnstile"
+    assert out["source"] == "rules"          # nessun esempio confermato ancora
+    assert out["severity"] == "high"         # floor sulle categorie di accesso
+
+
+def test_correzione_umana_insegna_al_motore(service):
+    svc, _ = service
+    # Frase senza parole chiave: le regole la mandano su "other".
+    frase = "la colonnina si inceppa e la gente si accumula"
+    assert svc.classify_request(frase)["category"] == "other"
+    # Un umano corregge 15 richieste simili -> il motore impara.
+    for i in range(15):
+        svc.record_triage(frase, {"category": "other", "severity": "medium",
+                                  "confidence": 0.0, "source": "rules"},
+                          call_id="call-%d" % i)
+        svc.confirm_triage(call_id="call-%d" % i, category="turnstile", severity="high")
+    for i in range(15):
+        svc.record_triage("problema con la fattura mensile", {"category": "billing", "severity": "medium",
+                                                              "confidence": 0.0, "source": "rules"},
+                          call_id="bill-%d" % i)
+        svc.confirm_triage(call_id="bill-%d" % i, category="billing", severity="medium")
+    out = svc.classify_request(frase)
+    assert out["category"] == "turnstile"    # ha imparato dalla correzione
+    assert out["source"] in ("model", "rules+model")
+
+
+def test_il_motore_non_impara_dalle_proprie_previsioni(service):
+    svc, _ = service
+    # 30 previsioni registrate ma MAI confermate: il modello resta a zero.
+    for i in range(30):
+        svc.record_triage("qualcosa di strano succede", {"category": "software", "severity": "medium",
+                                                          "confidence": 0.9, "source": "model"},
+                          call_id="p-%d" % i)
+    stats = svc.triage_stats()
+    assert stats["confirmed"] == 0
+    assert stats["category"]["examples"] == 0
+    assert stats["category"]["ready"] is False
+
+
+def test_confirm_triage_rifiuta_etichette_non_valide(service):
+    svc, _ = service
+    svc.record_triage("test", {"category": "other", "severity": "medium",
+                               "confidence": 0.0, "source": "rules"}, call_id="x-1")
+    with pytest.raises(ValueError):
+        svc.confirm_triage(call_id="x-1", category="categoria_inventata")
+    with pytest.raises(ValueError):
+        svc.confirm_triage(call_id="x-1", severity="gravissima")
+    with pytest.raises(ValueError):
+        svc.confirm_triage(category="software")          # senza call_id/ticket_id
+    assert svc.confirm_triage(call_id="ignoto", category="software")["ok"] is False
+
+
+def test_triage_stats_misura_accuratezza(service):
+    svc, _ = service
+    svc.record_triage("tornello bloccato", {"category": "turnstile", "severity": "high",
+                                            "confidence": 0.0, "source": "rules"}, call_id="a-1")
+    svc.confirm_triage(call_id="a-1", category="turnstile")      # previsione giusta
+    svc.record_triage("problema di rete", {"category": "hardware", "severity": "medium",
+                                           "confidence": 0.0, "source": "rules"}, call_id="a-2")
+    svc.confirm_triage(call_id="a-2", category="software")       # previsione sbagliata
+    stats = svc.triage_stats()
+    assert stats["confirmed"] == 2
+    assert stats["accuracy_on_confirmed"] == 0.5
+
+
+def test_richieste_ricorrenti_vengono_contate(service):
+    svc, _ = service
+    for i in range(3):
+        svc.record_triage("tornello bloccato", {"category": "turnstile", "severity": "high",
+                                                "confidence": 0.0, "source": "rules"},
+                          call_id="r-%d" % i, company_id="company-1")
+    assert svc.recurring_issue_count("company-1", "turnstile") == 3
+    assert svc.recurring_issue_count("company-1", "billing") == 0
+    assert svc.recurring_issue_count("", "turnstile") == 0
+
+
+def test_smistamento_operatore_e_commerciale():
+    from support_integration.triage import route_request
+    # La richiesta esplicita di un umano vince su tutto.
+    assert route_request("voglio parlare con un operatore",
+                         eligible_for_support=True)["destination"] == "umano"
+    # Due tentativi falliti -> non insistere, passa a un umano.
+    assert route_request("non ci siamo capiti", eligible_for_support=True,
+                         failed_attempts=2)["destination"] == "umano"
+    # Intento commerciale.
+    assert route_request("vorrei un preventivo",
+                         eligible_for_support=True)["destination"] == "commerciale"
+    # Non cliente vinto -> commerciale (regola di business esistente).
+    assert route_request("il gestionale si blocca",
+                         eligible_for_support=False)["destination"] == "commerciale"
+    # Cliente idoneo con richiesta chiara -> assistenza tecnica.
+    assert route_request("il gestionale si blocca", eligible_for_support=True,
+                         confidence=0.9)["destination"] == "tecnica"
+
+
+def test_route_call_end_to_end(service):
+    svc, fake = service
+    out = svc.route_call("il tornello non gira", phone="+393331234567")
+    assert out["destination"] in ("tecnica", "commerciale")
+    assert out["category"] == "turnstile"
+    assert "reason" in out
+
+
+def test_senza_modello_addestrato_non_si_finisce_tutti_da_un_umano(service):
+    """Regressione: le regole non esprimono incertezza.
+
+    Con il modello ancora vuoto la confidenza vale 0; se venisse interpretata
+    come "richiesta non compresa", ogni chiamata verrebbe dirottata su un
+    operatore fin dal primo giorno.
+    """
+    svc, _ = service
+    assert svc.classify_request("il gestionale si blocca")["source"] == "rules"
+    out = svc.route_call("il gestionale si blocca", phone="+393331234567")
+    assert out["destination"] != "umano"

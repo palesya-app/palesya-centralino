@@ -11,6 +11,7 @@ from schema import ensure_schema
 
 from . import finance
 from . import expenses as expenses_mod
+from . import triage as triage_mod
 from . import usage as usage_mod
 from .config import settings as support_settings
 from .hubspot import HubSpotClient
@@ -46,6 +47,10 @@ class SupportService:
         self._is_pg = db_compat.is_postgres(self._target)
         self.support_config = support_config or support_settings
         self.hubspot = hubspot or HubSpotClient(self.support_config)
+        # Motore di smistamento: costruito pigramente e ricostruito quando
+        # arrivano nuove conferme umane (vedi _triage / confirm_triage).
+        self._triage = None
+        self._triage_version = -1
 
     def _conn(self):
         return db_compat.connect(self._target)
@@ -227,6 +232,183 @@ class SupportService:
             return severity or "medium"
         cur = severity if severity in order else "medium"
         return floor if order.index(cur) < order.index(floor) else cur
+
+    # --- Smistamento intelligente + apprendimento -------------------------
+    # Le regole a parole chiave restano la base (nessuna regressione); il
+    # modello appreso le scavalca solo quando ha visto abbastanza correzioni
+    # umane ed è sicuro. Vedi support_integration/triage.py.
+
+    def _confirmed_count(self):
+        """Quante correzioni umane sono state registrate (chiave della cache)."""
+        con = self._conn()
+        try:
+            row = con.execute(
+                "SELECT COUNT(*) AS N FROM SUPPORT_TRIAGE_EVENTS WHERE CONFIRMED_AT IS NOT NULL"
+            ).fetchone()
+            return int((row["N"] if row else 0) or 0)
+        except Exception:
+            logger.warning("triage_confirmed_count_failed")
+            return 0
+        finally:
+            con.close()
+
+    def _triage_engine(self):
+        """Motore di smistamento, ricostruito quando arrivano nuove conferme."""
+        version = self._confirmed_count()
+        if self._triage is not None and version == self._triage_version:
+            return self._triage
+        engine = triage_mod.TriageEngine(
+            valid_categories=tuple(self.CATEGORY_LABELS.keys()),
+            valid_severities=tuple(self.SEVERITY_TO_PRIORITY.keys()),
+            category_rule=self._infer_category,
+            severity_rule=self._infer_severity,
+        )
+        engine.learn_many(self._confirmed_examples())
+        self._triage = engine
+        self._triage_version = version
+        return engine
+
+    def _confirmed_examples(self, limit=5000):
+        """Esempi con etichetta confermata da un umano (unica fonte di verità)."""
+        con = self._conn()
+        try:
+            rows = con.execute(
+                "SELECT REQUEST_TEXT, CONFIRMED_CATEGORY, CONFIRMED_SEVERITY "
+                "FROM SUPPORT_TRIAGE_EVENTS WHERE CONFIRMED_AT IS NOT NULL "
+                "ORDER BY ID DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        except Exception:
+            logger.warning("triage_examples_unavailable")
+            return []
+        finally:
+            con.close()
+        return [
+            {"text": r["REQUEST_TEXT"], "category": r["CONFIRMED_CATEGORY"], "severity": r["CONFIRMED_SEVERITY"]}
+            for r in (rows or ())
+        ]
+
+    def classify_request(self, text):
+        """Categoria + gravità con confidenza e provenienza della decisione."""
+        engine = self._triage_engine()
+        category = engine.classify_category(text)
+        severity = engine.classify_severity(text)
+        final_severity = self._severity_floor(category.label, severity.label)
+        return {
+            "category": category.label,
+            "severity": final_severity,
+            "confidence": round(min(category.confidence, severity.confidence), 4),
+            "source": category.source,
+            "severity_source": severity.source,
+            "severity_raw": severity.label,
+        }
+
+    def record_triage(self, text, prediction, *, call_id="", ticket_id="", company_id=""):
+        """Registra la previsione, così una correzione futura potrà insegnarla."""
+        if not str(text or "").strip():
+            return None
+        con = self._conn()
+        try:
+            con.execute(
+                "INSERT INTO SUPPORT_TRIAGE_EVENTS(CALL_ID,TICKET_ID,COMPANY_ID,REQUEST_TEXT,"
+                "PREDICTED_CATEGORY,PREDICTED_SEVERITY,PREDICTED_CONFIDENCE,PREDICTION_SOURCE,CREATED_AT) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (str(call_id or ""), str(ticket_id or ""), str(company_id or ""), str(text),
+                 prediction.get("category"), prediction.get("severity"),
+                 float(prediction.get("confidence") or 0.0), prediction.get("source"), _now()),
+            )
+            con.commit()
+            return True
+        except Exception:
+            logger.warning("triage_record_failed")
+            return None
+        finally:
+            con.close()
+
+    def confirm_triage(self, *, call_id="", ticket_id="", category="", severity="", confirmed_by="human"):
+        """Registra la correzione umana: da qui in poi il modello la conosce."""
+        category = str(category or "").strip().lower()
+        severity = str(severity or "").strip().lower()
+        if category and category not in self.CATEGORY_LABELS:
+            raise ValueError("categoria non valida")
+        if severity and severity not in self.SEVERITY_TO_PRIORITY:
+            raise ValueError("gravita non valida")
+        if not category and not severity:
+            raise ValueError("serve almeno categoria o gravita")
+        if not call_id and not ticket_id:
+            raise ValueError("serve call_id o ticket_id")
+        con = self._conn()
+        try:
+            if call_id:
+                where, params = "CALL_ID=?", (str(call_id),)
+            else:
+                where, params = "TICKET_ID=?", (str(ticket_id),)
+            row = con.execute(
+                "SELECT ID, PREDICTED_CATEGORY, PREDICTED_SEVERITY FROM SUPPORT_TRIAGE_EVENTS "
+                "WHERE " + where + " ORDER BY ID DESC LIMIT 1", params
+            ).fetchone()
+            if not row:
+                return {"ok": False, "error": "richiesta non trovata"}
+            con.execute(
+                "UPDATE SUPPORT_TRIAGE_EVENTS SET CONFIRMED_CATEGORY=?, CONFIRMED_SEVERITY=?, "
+                "CONFIRMED_BY=?, CONFIRMED_AT=? WHERE ID=?",
+                (category or row["PREDICTED_CATEGORY"], severity or row["PREDICTED_SEVERITY"],
+                 str(confirmed_by or "human"), _now(), row["ID"]),
+            )
+            con.commit()
+        finally:
+            con.close()
+        self._triage = None  # forza il riapprendimento alla prossima classificazione
+        return {"ok": True, "category": category or row["PREDICTED_CATEGORY"],
+                "severity": severity or row["PREDICTED_SEVERITY"]}
+
+    def triage_stats(self):
+        """Stato dell'apprendimento: quanto ha imparato e se è operativo."""
+        engine = self._triage_engine()
+        con = self._conn()
+        try:
+            total = con.execute("SELECT COUNT(*) AS N FROM SUPPORT_TRIAGE_EVENTS").fetchone()
+            agreed = con.execute(
+                "SELECT COUNT(*) AS N FROM SUPPORT_TRIAGE_EVENTS WHERE CONFIRMED_AT IS NOT NULL "
+                "AND CONFIRMED_CATEGORY=PREDICTED_CATEGORY"
+            ).fetchone()
+        except Exception:
+            total, agreed = None, None
+        finally:
+            con.close()
+        recorded = int((total["N"] if total else 0) or 0)
+        confirmed = self._confirmed_count()
+        matched = int((agreed["N"] if agreed else 0) or 0)
+        return {
+            "recorded": recorded,
+            "confirmed": confirmed,
+            "accuracy_on_confirmed": round(matched / confirmed, 4) if confirmed else None,
+            **engine.stats(),
+        }
+
+    def recurring_issue_count(self, company_id, category, days=30):
+        """Quante volte la stessa azienda ha già segnalato quella categoria.
+
+        Serve a "organizzare" le richieste: un problema che si ripete non è un
+        caso isolato e va trattato con priorità più alta.
+        """
+        if not company_id or not category:
+            return 0
+        since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=int(days))).isoformat(timespec="seconds")
+        con = self._conn()
+        try:
+            row = con.execute(
+                "SELECT COUNT(*) AS N FROM SUPPORT_TRIAGE_EVENTS "
+                "WHERE COMPANY_ID=? AND CREATED_AT>=? AND "
+                "COALESCE(CONFIRMED_CATEGORY, PREDICTED_CATEGORY)=?",
+                (str(company_id), since, str(category)),
+            ).fetchone()
+            return int((row["N"] if row else 0) or 0)
+        except Exception:
+            logger.warning("triage_recurrence_failed")
+            return 0
+        finally:
+            con.close()
 
     def _ticket_properties(self, call, *, support_consumed=False, before=None, after=None,
                            reason=None, summary="", resolution="", category="other",
@@ -839,6 +1021,45 @@ class SupportService:
             "company_id": None, "company_name": None,
         })
 
+    def route_call(self, text="", phone="", call_id="", company_name="", failed_attempts=0):
+        """Decide a chi passare la chiamata, unendo riconoscimento e classificazione.
+
+        Restituisce destinazione + motivo + la classificazione già pronta, così
+        l'agente vocale non deve ripetere la stessa logica nei prompt.
+        """
+        try:
+            identity = self.verify_customer(phone=phone, company_name=company_name, call_id=call_id)
+        except Exception:
+            logger.warning("route_call verify_failed")
+            identity = {"customer_match_status": "unknown", "eligible_for_support": False}
+        prediction = self.classify_request(text) if str(text or "").strip() else {
+            "category": "other", "severity": "medium", "confidence": 0.0, "source": "rules",
+        }
+        # La valvola "richiesta non compresa" ha senso solo su una confidenza reale,
+        # cioè quando a decidere è stato il modello. Le regole a parole chiave sono
+        # deterministiche e non esprimono incertezza: trattarne la confidenza come 0
+        # manderebbe ogni chiamata a un operatore finché il modello non ha imparato.
+        confidence = float(prediction.get("confidence") or 0.0)
+        if str(prediction.get("source") or "").startswith("rules") and "model" not in str(prediction.get("source")):
+            confidence = 1.0
+        decision = triage_mod.route_request(
+            text,
+            eligible_for_support=bool(identity.get("eligible_for_support")),
+            match_status=str(identity.get("customer_match_status") or "unknown"),
+            failed_attempts=_int(failed_attempts),
+            confidence=confidence,
+        )
+        return {
+            "destination": decision["destination"],
+            "reason": decision["reason"],
+            "category": prediction["category"],
+            "severity": prediction["severity"],
+            "confidence": prediction["confidence"],
+            "customer_match_status": identity.get("customer_match_status"),
+            "eligible_for_support": bool(identity.get("eligible_for_support")),
+            "company_name": identity.get("company_name"),
+        }
+
     def create_callback(self, call_id, phone="", reason="", name="", actor="voice_ai", company_name=""):
         """Registra una richiesta di ricontatto / lead (idempotente per call_id).
 
@@ -1031,12 +1252,14 @@ class SupportService:
         summary = str(summary or "").strip() or description
         troubleshooting = str(troubleshooting or "").strip()
         classify_text = " ".join(filter(None, (description, summary, troubleshooting)))
+        # Smistamento intelligente: regole + modello appreso dalle correzioni umane.
+        triage = self.classify_request(classify_text)
         category = str(category or "").strip().lower()
         if category in ("", "other"):
-            category = self._infer_category(classify_text)
+            category = triage["category"]
         severity = str(severity or "").strip().lower()
         if not severity:
-            severity = self._infer_severity(classify_text)
+            severity = triage["severity"]
         severity = self._severity_floor(category, severity)
         session = self._session(call_id)
         if not session and phone:
@@ -1093,11 +1316,18 @@ class SupportService:
             escalation_reason=escalation_reason, follow_up=follow_up, contact_name=contact_name,
         ))
         self._save_session(call_id, {"TICKET_ID": ticket_id})
+        # Traccia la previsione: se un umano correggerà la categoria, il motore
+        # imparerà da questa riga (vedi confirm_triage).
+        self.record_triage(classify_text, triage, call_id=call_id, ticket_id=ticket_id,
+                           company_id=session.get("COMPANY_ID") or "")
+        recurring = self.recurring_issue_count(session.get("COMPANY_ID"), category)
         return {"ok": True, "ticket_id": ticket_id, "follow_up": follow_up,
                 "customer_found": bool(session.get("COMPANY_ID")),
                 "company_name": display_company or None,
                 "contact_name": contact_name or None,
                 "category": category, "severity": severity,
+                "triage": {"confidence": triage["confidence"], "source": triage["source"]},
+                "recurring_issue_count": recurring,
                 "existing_open_tickets": [str(item.get("id")) for item in open_tickets]}
 
     def create_web_ticket(self, name="", company_name="", email="", phone="", category="", description=""):
@@ -1114,10 +1344,11 @@ class SupportService:
         company_name = str(company_name or "").strip()
         email = str(email or "").strip()
         normalized = normalize_phone(phone, self.support_config.default_country_code) if phone else ""
+        triage = self.classify_request(description)
         category = str(category or "").strip().lower()
         if category not in self.CATEGORY_LABELS:
-            category = self._infer_category(description)
-        severity = self._severity_floor(category, self._infer_severity(description))
+            category = triage["category"]
+        severity = self._severity_floor(category, triage["severity_raw"])
         company_id, contact_id, resolved_company = None, None, company_name
         if normalized:
             try:
@@ -1151,8 +1382,11 @@ class SupportService:
             call, support_consumed=False, summary=description, category=category, status="new",
             source="web", match_status=call["customer_match_status"], severity=severity,
             contact_name=name))
+        self.record_triage(description, triage, call_id=call_id, ticket_id=ticket_id,
+                           company_id=company_id or "")
         logger.info("web_ticket_created company_present=%s category=%s", bool(company_id), category)
         return {"ok": True, "ticket_id": ticket_id, "category": category, "severity": severity,
+                "triage": {"confidence": triage["confidence"], "source": triage["source"]},
                 "company_name": resolved_company or None, "customer_found": bool(company_id)}
 
     def reverse_consumption(self, call_id, actor="admin"):
