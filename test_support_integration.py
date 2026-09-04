@@ -811,3 +811,30 @@ def test_senza_modello_addestrato_non_si_finisce_tutti_da_un_umano(service):
     assert svc.classify_request("il gestionale si blocca")["source"] == "rules"
     out = svc.route_call("il gestionale si blocca", phone="+393331234567")
     assert out["destination"] != "umano"
+
+
+def test_split_statements_ignora_commenti_con_punto_e_virgola():
+    """Regressione: un ';' dentro un commento SQL spezzava lo statement.
+
+    Su SQLite non si vedeva (executescript esegue lo script intero); su Postgres
+    il frammento orfano diventava una query invalida e il deploy falliva.
+    """
+    import db_compat as _db
+    script = """
+    -- commento con punto e virgola; e testo dopo
+    CREATE TABLE T(A TEXT);
+    CREATE INDEX I ON T(A);
+    """
+    statements = _db.split_statements(script)
+    assert len(statements) == 2
+    assert all("commento" not in s for s in statements)
+    assert "CREATE TABLE" in statements[0] and "CREATE INDEX" in statements[1]
+
+
+def test_schema_reale_non_ha_statement_orfani():
+    """Ogni statement dello schema deve iniziare con una parola chiave DDL."""
+    import db_compat as _db
+    from schema import SUPPORT_SCHEMA
+    for statement in _db.split_statements(SUPPORT_SCHEMA):
+        head = statement.strip().split()[0].upper()
+        assert head in ("CREATE", "ALTER", "DROP", "INSERT"), statement.strip()[:80]

@@ -115,9 +115,9 @@ CREATE TABLE IF NOT EXISTS SUPPORT_COMMERCIAL_LINKS(
     CREATED_AT TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Memoria di smistamento: ogni classificazione viene registrata con la sua
--- previsione; quando un umano corregge la categoria/gravità la riga viene
--- confermata. Il modello impara SOLO dalle righe confermate.
+-- Memoria di smistamento. Ogni classificazione viene registrata con la sua
+-- previsione. Quando un umano corregge la categoria o la gravita, la riga
+-- viene confermata. Il modello impara SOLO dalle righe confermate.
 CREATE TABLE IF NOT EXISTS SUPPORT_TRIAGE_EVENTS(
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
     CALL_ID TEXT,

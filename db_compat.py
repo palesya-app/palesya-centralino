@@ -51,6 +51,20 @@ def _ci_row_factory(cursor):
 _PLACEHOLDER = re.compile(r"\?")
 
 
+def split_statements(script):
+    """Spezza uno script SQL in statement, ignorando le righe di commento.
+
+    Lo split ingenuo su ``;`` rompe se un commento ``--`` contiene un punto e
+    virgola: il frammento dopo il ``;`` diventerebbe uno statement invalido.
+    SQLite non se ne accorge (esegue lo script intero), Postgres sì — quindi
+    l'errore si vedrebbe solo in produzione. Le righe di commento vengono tolte
+    prima dello split.
+    """
+    lines = [line for line in str(script or "").splitlines()
+             if not line.strip().startswith("--")]
+    return [statement for statement in "\n".join(lines).split(";") if statement.strip()]
+
+
 class _PgResult:
     def __init__(self, cursor):
         self._cursor = cursor
@@ -84,9 +98,8 @@ class PgConnection:
 
     def executescript(self, script):
         with self._connection.cursor() as cursor:
-            for statement in script.split(";"):
-                if statement.strip():
-                    cursor.execute(statement)
+            for statement in split_statements(script):
+                cursor.execute(statement)
         self._connection.commit()
 
     def commit(self):
